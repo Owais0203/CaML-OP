@@ -1,0 +1,4 @@
+method,AUC,AUPRC,Brier
+Cox PH,0.7358,0.745,0.2338
+RF (RSF surrogate),0.7145,0.7148,0.2142
+XGBoost,0.657,0.6631,0.2493

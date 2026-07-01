@@ -1,0 +1,11 @@
+,mean,sd
+CaML-OP,0.5585,0.0731
+TreatAll,0.5514,0.0845
+Oracle,0.5477,0.0901
+DR-Learner,0.5465,0.077
+S-Learner,0.5452,0.0767
+R-Learner,0.5354,0.0741
+T-Learner,0.5308,0.0629
+Causal Forest,0.5304,0.0824
+X-Learner,0.5263,0.0692
+TreatNone,0.5017,0.0795

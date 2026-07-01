@@ -1,0 +1,165 @@
+\textbf{CONSTRUCTOR UNIVERSITY}
+
+School of Computer Science and Engineering
+
+\textbf{CaML-OP: Causal Machine Learning for Oncology Personalization}
+
+\emph{A Hybrid Predictive-Causal Framework for Explainable Oncology, Informed by the EU AI Act}
+
+by
+
+\textbf{Muhammad Owais Suhail}
+
+Bachelor Thesis in Computer Science
+
+Supervisor: Ishansh Gupta
+
+Co-Supervisor: Prof. Dr. Hendro Wicaksono
+
+Submission: 19 May 2026
+
+\chapter*{Statutory Declaration}
+\addcontentsline{toc}{chapter}{Statutory Declaration}
+
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 2\tabcolsep) * \real{0.5000}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 2\tabcolsep) * \real{0.5000}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright
+\textbf{Family Name, Given/First Name}
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Suhail, Muhammad Owais
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+\textbf{Matriculation number} & 30006217 \\
+\textbf{Kind of thesis submitted} & Bachelor Thesis \\
+\end{longtable}
+
+\textbf{English: Declaration of Authorship}
+
+I hereby declare that the thesis submitted was created and written solely by myself without
+
+any external support. Any sources, direct or indirect, are marked as such. I am aware
+
+of the fact that the contents of the thesis in digital form may be revised with regard to
+
+usage of unauthorized aid as well as whether the whole or parts of it may be identified as
+
+plagiarism. I do agree my work to be entered into a database for it to be compared with
+
+existing sources, where it will remain in order to enable further comparisons with future
+
+theses. This does not grant any rights of reproduction and usage, however.
+
+This document was neither presented to any other examination board nor has it been
+
+published.
+
+\textbf{German: Erkl ¨arung der Autorenschaft (Urheberschaft)}
+
+Ich erkl ¨are hiermit, dass die vorliegende Arbeit ohne fremde Hilfe ausschließlich von
+
+mir erstellt und geschrieben worden ist. Jedwede verwendeten Quellen, direkter oder
+
+indirekter Art, sind als solche kenntlich gemacht worden. Mir ist die Tatsache bewusst,
+
+dass der Inhalt der Thesis in digitaler Form gepr ¨uft werden kann im Hinblick darauf, ob es
+
+sich ganz oder in Teilen um ein Plagiat handelt. Ich bin damit einverstanden, dass meine
+
+Arbeit in einer Datenbank eingegeben werden kann, um mit bereits bestehenden Quellen
+
+verglichen zu werden und dort auch verbleibt, um mit zuk ¨unftigen Arbeiten verglichen
+
+werden zu k ¨onnen. Dies berechtigt jedoch nicht zur Verwendung oder Vervielf ¨altigung.
+
+Diese Arbeit wurde noch keiner anderen Pr ¨ufungsbeh ¨orde vorgelegt noch wurde sie
+
+bisher ver ¨offentlicht.
+
+19 May 2026 Owais
+
+\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_\_
+
+Date, Signature
+
+\chapter*{Acknowledgements}
+\addcontentsline{toc}{chapter}{Acknowledgements}
+
+First and foremost, I want to express my sincere gratitude to my supervisor, Ishansh Gupta, for his invaluable guidance and technical feedback throughout the development of CaML-OP. His patience through the countless iterations of this pipeline truly shaped the final form of this work.
+
+I am equally grateful to my co-supervisor, Prof. Dr. Hendro Wicaksono, for his oversight of the academic process and his sharp, constructive criticism of the regulatory framing.
+
+My thanks also go to the faculty and staff at the School of Computer Science and Engineering at Constructor University for providing the academic environment that made this thesis possible.
+
+Finally, I gratefully acknowledge The Cancer Genome Atlas (TCGA) Research Network and the National Cancer Institute for making the TCGA-OV dataset publicly available. This work would also not be possible without the incredible open-source communities behind EconML, XGBoost, scikit-learn, lifelines, and the broader Python scientific ecosystem.
+
+\chapter*{Abstract}
+\addcontentsline{toc}{chapter}{Abstract}
+
+Tailoring cancer treatments to individual patients remains a major challenge in oncology. Right now, decisions about platinum-based chemotherapy for ovarian cancer are mostly based on broad population averages. This approach completely misses the huge differences in how individual patients respond to treatment. To make matters worse, most clinical AI tools predict outcomes rather than identifying actual causes, and almost all of them were built before the EU Artificial Intelligence Act was introduced.
+
+This thesis introduces CaML-OP (Causal Machine Learning for Oncology Personalization). It is a hybrid predictive causal framework that pairs a gradient-boosted prognostic encoder (XGBoost) with R- and Doubly Robust (DR) causal meta-learners. We also integrated an Effect-SHAP attribution layer, an LLM narrative module featuring automated faithfulness checks, and a functional Stream lit dashboard prototype. We designed this dashboard with the EU AI Act's high-risk AI requirements in mind using patient-level explanations and subgroup reporting as practical design features to address those rules rather than treating them as strict legal mandates.
+
+We evaluated the pipeline using TCGA-OV covariates (leaving a working sample of n = 547 after preprocessing) across a semi-synthetic benchmark with four data-generating processes and ten runs per scenario. We tested it against six causal baselines and three binary-outcome predictive comparators. To confirm the architecture was stable and statistically consistent, we ran a purely synthetic verification at N up to 4000.
+
+Using the off-policy AIPW estimator, CaML-OP hit the highest mean estimated policy value (V = 0.559). However, because the estimator ranks the "treat-all" and "oracle" benchmarks very close together, this result means that CaML-OP\textquotesingle s estimated value is not statistically distinguishable from the oracle benchmark under this finite-sample off-policy estimator (Wilcoxon p = 0.42), rather than proving it is fully equivalent to knowing the true treatment effects. Notably, CaML-OP is the only ensemble to provide an approximate patient-level uncertainty interval; its empirical coverage on the test set reached 0.847 against a nominal 0.95 target. Subgroup PEHE showed only minor variations across age, FIGO stage, and race strata, indicating no major error concentration on this benchmark, though this does not constitute a full fairness audit.
+
+Ultimately, the core contribution of this work is at the system level. We have built a unified framework that weaves together XGBoost leaf embeddings, R/DR ensembles, causal explainability, and EU AI Act-informed design to estimate individual treatment effects in ovarian cancer from routine clinical data. CaML-OP is presented strictly as a research prototype, not a deployable clinical tool.
+
+\textbf{Keywords:} \emph{Causal Machine Learning; Individualized Treatment Effects; Explainable AI; Ovarian Cancer; Platinum Chemotherapy; EU AI Act; XGBoost; Clinical Decision Support.}
+
+\chapter*{List of Abbreviations}
+\addcontentsline{toc}{chapter}{List of Abbreviations}
+
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 2\tabcolsep) * \real{0.2350}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 2\tabcolsep) * \real{0.7650}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright
+\textbf{Abbreviation}
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+\textbf{Meaning}
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+AIPW & Augmented Inverse Probability Weighting \\
+ATE & Average Treatment Effect \\
+AUC & Area Under the ROC Curve \\
+AUPRC & Area Under the Precision-Recall Curve \\
+CaML-OP & Causal Machine Learning for Oncology Personalization \\
+CDSS & Clinical Decision Support System \\
+CI & Confidence Interval \\
+Cox PH & Cox Proportional Hazards model \\
+DAG & Directed Acyclic Graph \\
+DGP & Data-Generating Process \\
+DML & Double Machine Learning \\
+DR & Doubly Robust \\
+EU AI Act & Regulation (EU) 2024/1689 - the EU Artificial Intelligence Act \\
+FIGO & International Federation of Gynecology and Obstetrics \\
+GDC & Genomic Data Commons \\
+HGSOC & High-Grade Serous Ovarian Cancer \\
+HTE & Heterogeneous Treatment Effect \\
+IARC & International Agency for Research on Cancer \\
+ITE & Individualized Treatment Effect \\
+LLM & Large Language Model \\
+MAE & Mean Absolute Error \\
+MICE & Multivariate Imputation by Chained Equations \\
+NCI & National Cancer Institute \\
+PDX & Patient-Derived Xenograft \\
+PEHE & Precision in Estimation of Heterogeneous Effects \\
+RCT & Randomized Controlled Trial \\
+RF & Random Forest \\
+RSF & Random Survival Forest \\
+SHAP & SHapley Additive exPlanations \\
+SUTVA & Stable Unit Treatment Value Assumption \\
+TCGA-OV & The Cancer Genome Atlas - Ovarian Serous Cystadenocarcinoma \\
+XAI & Explainable Artificial Intelligence \\
+XGBoost & Extreme Gradient Boosting \\
+\end{longtable}
+

@@ -1,0 +1,111 @@
+\documentclass[11pt,a4paper,oneside]{report}
+
+% ---------- Encoding & fonts ----------
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[english]{babel}
+
+% ---------- Layout ----------
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{setspace}
+\onehalfspacing
+\usepackage{parskip}
+\usepackage{emptypage}
+
+% ---------- Graphics, tables, math ----------
+\usepackage{graphicx}
+\graphicspath{{media/}{./}}
+\usepackage{longtable,booktabs,array}
+\usepackage{calc}
+\usepackage{amsmath,amssymb}
+\usepackage{caption}
+\captionsetup{font=small,labelfont=bf}
+\usepackage{float}
+
+% ---------- pandoc helper macros ----------
+\providecommand{\tightlist}{%
+  \setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+\providecommand{\textquotesingle}{\textquotesingle}
+\usepackage{longtable}
+
+% ---------- Headers ----------
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\nouppercase{\leftmark}}
+\fancyhead[R]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+\setlength{\headheight}{14pt}
+
+% ---------- Hyperlinks (load near last) ----------
+\usepackage[hidelinks,breaklinks=true]{hyperref}
+\hypersetup{
+  pdftitle={CaML-OP: Causal Machine Learning for Oncology Personalization},
+  pdfauthor={Muhammad Owais Suhail},
+  bookmarksnumbered=true
+}
+\usepackage{bookmark}
+
+\begin{document}
+
+% ============================================================
+% TITLE PAGE
+% ============================================================
+\begin{titlepage}
+\centering
+{\Large\bfseries CONSTRUCTOR UNIVERSITY\par}
+\vspace{0.3cm}
+{\large School of Computer Science and Engineering\par}
+\vfill
+{\huge\bfseries CaML-OP: Causal Machine Learning for Oncology Personalization\par}
+\vspace{0.8cm}
+{\large\itshape A Hybrid Predictive--Causal Framework for Explainable Oncology,\\
+Informed by the EU AI Act\par}
+\vfill
+{\large by\par}
+\vspace{0.4cm}
+{\Large\bfseries Muhammad Owais Suhail\par}
+\vspace{1.2cm}
+{\large Bachelor Thesis in Computer Science\par}
+\vfill
+\begin{flushleft}
+\large
+\hspace{2cm}\begin{tabular}{@{}ll@{}}
+Supervisor: & Ishansh Gupta\\[4pt]
+Co-Supervisor: & Prof.\ Dr.\ Hendro Wicaksono\\[4pt]
+Submission: & 19 May 2026\\
+\end{tabular}
+\end{flushleft}
+\vspace{1cm}
+\end{titlepage}
+
+% ============================================================
+% FRONT MATTER
+% ============================================================
+\pagenumbering{roman}
+\setcounter{page}{1}
+
+\input{front.tex}
+
+\cleardoublepage
+\tableofcontents
+\cleardoublepage
+\listoffigures
+\cleardoublepage
+\listoftables
+\cleardoublepage
+
+% ============================================================
+% MAIN MATTER
+% ============================================================
+\pagenumbering{arabic}
+\setcounter{page}{1}
+
+\input{main.tex}
+
+% ============================================================
+% REFERENCES
+% ============================================================
+\input{refs.tex}
+
+\end{document}

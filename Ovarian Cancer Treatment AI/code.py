@@ -119,7 +119,7 @@ class LeafEncoder:
         self.model = xgb.XGBClassifier(
             n_estimators=n_estimators, max_depth=max_depth,
             learning_rate=lr, eval_metric="logloss",
-            random_state=seed, verbosity=0, use_label_encoder=False,
+            random_state=seed, verbosity=0,
         )
         self.leaf_max_ = None
 
@@ -323,7 +323,7 @@ def fit_predictive_baselines(X_tr, T_tr, Y_tr, X_te, Y_te, seed):
     try:
         clf = xgb.XGBClassifier(n_estimators=200, max_depth=4, learning_rate=0.1,
                                 eval_metric='logloss', random_state=seed,
-                                verbosity=0, use_label_encoder=False)
+                                verbosity=0)
         clf.fit(X_tr_df.values, Y_tr)
         preds = []
         for t_val in [0, 1]:
@@ -355,12 +355,38 @@ def mae(true, pred):
 def ate_error(true, pred):
     return float(abs(np.mean(true) - np.mean(pred)))
 
-def aipw_policy_value(tau_pred, Y, T, e_true):
+def aipw_policy_value(tau_pred, Y, T, e_true, mu0, mu1):
+    """Doubly-robust (augmented IPW) policy value (Dudik, Langford & Li, 2011):
+
+        V(pi) = mean[ mu_hat_pi(x) + 1{T = pi(x)}/e(x) * (Y - mu_hat_T(x)) ]
+
+    mu0/mu1 are plug-in outcome-regression estimates E[Y|X,T=0/1], fit once
+    per run on the training fold (see fit_outcome_models) and shared across
+    every method being scored, so the augmentation term is a common,
+    fair correction rather than something that favours any one estimator.
+    Without it (an IPW-only estimator with no outcome-regression term) this
+    is *not* AIPW despite the name/label used throughout the thesis.
+    """
     pi = (tau_pred > 0).astype(int)
     e_clip = np.clip(e_true, 0.05, 0.95)
     w = np.where(pi == 1, 1.0 / e_clip, 1.0 / (1.0 - e_clip))
     agree = (pi == T).astype(float)
-    return float(np.mean(Y * agree * w))
+    mu_pi  = np.where(pi == 1, mu1, mu0)
+    mu_obs = np.where(T == 1, mu1, mu0)
+    return float(np.mean(mu_pi + agree * w * (Y - mu_obs)))
+
+
+def fit_outcome_models(X_tr, T_tr, Y_tr, seed):
+    """Arm-specific outcome regressions E[Y|X,T=0] and E[Y|X,T=1], used only
+    as the plug-in/augmentation term for aipw_policy_value. Fit once per
+    (scenario, run) on the training fold and reused across all methods."""
+    m0 = RandomForestClassifier(n_estimators=200, max_depth=6,
+                                min_samples_leaf=5, random_state=seed)
+    m1 = RandomForestClassifier(n_estimators=200, max_depth=6,
+                                min_samples_leaf=5, random_state=seed)
+    m0.fit(X_tr[T_tr == 0], Y_tr[T_tr == 0])
+    m1.fit(X_tr[T_tr == 1], Y_tr[T_tr == 1])
+    return m0, m1
 
 def ci_coverage(tau_true, lo, hi):
     """Fraction of true tau values inside the predicted 95% CI."""
@@ -430,11 +456,17 @@ def run_all(X_raw, scenarios=(1, 2, 3, 4), n_runs=10, verbose=True):
                 print(f"\n  Run {run+1}/{n_runs}  test n={len(te_idx)}, "
                       f"true ATE={tau_te.mean():+.3f}")
 
+            # Outcome-regression plug-in for the AIPW augmentation term,
+            # shared across every policy scored below (see aipw_policy_value).
+            m0, m1 = fit_outcome_models(X_tr, T_tr, Y_tr, run)
+            mu0_te = m0.predict_proba(X_te)[:, 1]
+            mu1_te = m1.predict_proba(X_te)[:, 1]
+
             # Reference policy values
             row_v = {"scenario": scen, "run": run,
-                     "TreatAll":  aipw_policy_value(np.ones_like(T_te), Y_te, T_te, e_te),
-                     "TreatNone": aipw_policy_value(-np.ones_like(T_te), Y_te, T_te, e_te),
-                     "Oracle":    aipw_policy_value(tau_te,             Y_te, T_te, e_te)}
+                     "TreatAll":  aipw_policy_value(np.ones_like(T_te), Y_te, T_te, e_te, mu0_te, mu1_te),
+                     "TreatNone": aipw_policy_value(-np.ones_like(T_te), Y_te, T_te, e_te, mu0_te, mu1_te),
+                     "Oracle":    aipw_policy_value(tau_te,             Y_te, T_te, e_te, mu0_te, mu1_te)}
 
             row_p = {"scenario": scen, "run": run}
             row_c = {"scenario": scen, "run": run}
@@ -448,7 +480,7 @@ def run_all(X_raw, scenarios=(1, 2, 3, 4), n_runs=10, verbose=True):
                     row_p[f"PEHE_{name}"]   = pehe(tau_te, tau_pred)
                     row_p[f"MAE_{name}"]    = mae(tau_te, tau_pred)
                     row_p[f"ATEerr_{name}"] = ate_error(tau_te, tau_pred)
-                    row_v[name] = aipw_policy_value(tau_pred, Y_te, T_te, e_te)
+                    row_v[name] = aipw_policy_value(tau_pred, Y_te, T_te, e_te, mu0_te, mu1_te)
 
                     # CI metrics if available
                     if ci is not None:

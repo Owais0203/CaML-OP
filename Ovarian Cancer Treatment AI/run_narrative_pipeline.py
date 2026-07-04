@@ -36,13 +36,21 @@ from llm_narrative_agent import NarrativeInputs, run_eval, mock_llm, call_claude
 OUT_DIR = "caml_op_outputs"
 
 
-def main(n_patients: int = 30, seed: int = 42, live: bool = False):
-    os.makedirs(OUT_DIR, exist_ok=True)
+def prepare_patient_rows(n_patients: int = 30, seed: int = 42, verbose: bool = True):
+    """Shared data/model/calibration prep, factored out so narrative_research_eval.py
+    can reuse the exact same patients (and their raw covariates, for the
+    subgroup breakdown) instead of duplicating this fitting logic.
 
-    print("Loading TCGA-OV covariates...")
+    Returns (patient_rows, X_sample, sample_idx, calib_factor).
+    """
+    def log(msg):
+        if verbose:
+            print(msg)
+
+    log("Loading TCGA-OV covariates...")
     X_raw, _, _, _ = load_tcga()
 
-    print("Simulating outcomes under DGP scenario 4 (interaction, hardest case)...")
+    log("Simulating outcomes under DGP scenario 4 (interaction, hardest case)...")
     Y, T, tau_true, e = generate_dgp(X_raw, seed=seed, scenario=4)
 
     idx = np.arange(len(X_raw))
@@ -57,14 +65,14 @@ def main(n_patients: int = 30, seed: int = 42, live: bool = False):
     cal_idx = np.setdiff1d(np.arange(len(X_te)), sample_idx)  # disjoint calibration split
     X_sample = X_te[sample_idx]
 
-    print(f"Fitting CaML-OP effect model on {len(X_tr)} training patients...")
+    log(f"Fitting CaML-OP effect model on {len(X_tr)} training patients...")
     model = CaMLOPEffectModel(seed=seed).fit(X_tr, T_tr, Y_tr)
     tau_hat = model.predict(X_sample)
     ci_lo, ci_hi = model.predict_interval(X_sample)
     half_width = (ci_hi - ci_lo) / 2
 
-    print(f"Fitting split-conformal calibration factor on {len(cal_idx)} held-out "
-          f"test patients disjoint from the {n_patients} narrated above...")
+    log(f"Fitting split-conformal calibration factor on {len(cal_idx)} held-out "
+        f"test patients disjoint from the {n_patients} narrated above...")
     tau_hat_cal = model.predict(X_te[cal_idx])
     cal_lo, cal_hi = model.predict_interval(X_te[cal_idx])
     calib_factor = fit_calibration_factor(
@@ -73,12 +81,12 @@ def main(n_patients: int = 30, seed: int = 42, live: bool = False):
         should_abstain(tau_hat[i], half_width[i], calib_factor)
         for i in range(n_patients)
     ])
-    print(f"Calibration factor: {calib_factor:.3f}x reported half-width. "
-          f"{must_abstain.sum()}/{n_patients} sampled patients must abstain "
-          f"from a directional sign claim once calibrated.")
+    log(f"Calibration factor: {calib_factor:.3f}x reported half-width. "
+        f"{must_abstain.sum()}/{n_patients} sampled patients must abstain "
+        f"from a directional sign claim once calibrated.")
 
-    print(f"Computing Effect-SHAP for {n_patients} sampled patients "
-          f"(model-agnostic permutation explainer)...")
+    log(f"Computing Effect-SHAP for {n_patients} sampled patients "
+        f"(model-agnostic permutation explainer)...")
     shap_values, feature_names = compute_effect_shap(model, X_tr, X_sample, seed=seed)
 
     patient_rows = []
@@ -95,6 +103,13 @@ def main(n_patients: int = 30, seed: int = 42, live: bool = False):
             top_negative=neg,
             must_abstain=bool(must_abstain[i]),
         ))
+    return patient_rows, X_sample, sample_idx, calib_factor
+
+
+def main(n_patients: int = 30, seed: int = 42, live: bool = False):
+    os.makedirs(OUT_DIR, exist_ok=True)
+    patient_rows, X_sample, sample_idx, calib_factor = prepare_patient_rows(n_patients, seed)
+    must_abstain = np.array([inp.must_abstain for inp in patient_rows])
 
     llm_fn = call_claude if live else mock_llm
     model_name = "claude-sonnet-5" if live else "mock"

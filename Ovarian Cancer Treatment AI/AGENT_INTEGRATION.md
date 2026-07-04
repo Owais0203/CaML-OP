@@ -307,3 +307,65 @@ tighter, cheaper win using infrastructure already in the codebase. Flagging
 it here as the next candidate if the pass-rate work in item 3 (Section 4
 above) turns up systematic sign-consistency issues that abstention alone
 doesn't explain.
+
+## 7. Raising the evaluation from a pass-rate to citable evidence
+
+A single aggregate pass-rate number is a demo result, not a thesis result.
+`narrative_research_eval.py` adds three things a reviewer would actually
+ask for, all built on the existing harness rather than new infrastructure:
+
+1. **Subgroup breakdown, tying RQ2 to RQ3.** `subgroup_pass_rates()` reuses
+   `code.py`'s own `subgroup_indices()` — the identical age/stage/race
+   definitions already used for the PEHE subgroup table — so narrative
+   faithfulness can be audited on the same axes as ITE estimation accuracy.
+   `compare_subgroups()` runs a Fisher's exact test (appropriate given the
+   small per-subgroup counts here, same constraint the thesis's own
+   subgroup analysis already names) between `raceMajority` and
+   `raceMinority`. Nobody had asked whether the *narrative layer* introduces
+   its own fairness gap on top of the causal estimator's — this makes that
+   question answerable, not answered: on the mock backend every narrative
+   passes by construction, so the table currently validates the
+   *mechanism*, not a real subgroup signal. A `--live` run is what would
+   turn this into an actual RQ3-adjacent finding.
+2. **Verifier stress test as a diagnostic classifier, not a demo.** The
+   single hand-written adversarial example from Section 5 proved the
+   checks *can* catch a lie; it didn't validate them systematically.
+   `run_verifier_stress_test()` builds twelve cases with known ground-truth
+   faithfulness by construction (wrong sign, hallucinated feature,
+   hallucinated quantity tag, numeric error, empty citation, mixed
+   true/hallucinated citation, correct and incorrect abstention) and
+   reports sensitivity/specificity the way a diagnostic test is validated —
+   distinguishing the dangerous error (an unfaithful narrative that slips
+   through, a false negative) from the merely annoying one (a faithful
+   narrative wrongly rejected, a false positive). Result on the current
+   checks: 12/12 correct, sensitivity = specificity = 1.0 on this case set.
+   That's a statement about coverage of *this* case set, not a proof of
+   completeness — it's a regression suite, and it should grow every time a
+   new failure mode is found (the way items 1-4 in Section 5 were each
+   found by running the thing, not by inspection).
+3. **Ablation quantifying what retry actually buys.** The deterministic
+   `mock_llm` never errs, so it structurally cannot demonstrate the retry
+   loop's value — there's nothing to recover from. `make_stochastic_mock()`
+   injects a configurable, explicit error rate (wrong sign / hallucinated
+   feature / numeric error, chosen uniformly) so `run_ablation()` can
+   measure pass-rate as a function of `max_retries` under controlled
+   conditions. At an assumed 30% per-call error rate (n=1000 trials per
+   configuration, Wilson CIs):
+
+   | config | max_retries | pass_rate | 95% CI |
+   |---|---|---|---|
+   | no_retry | 0 | 0.765 | [0.738, 0.790] |
+   | retry_x1 | 1 | 0.939 | [0.922, 0.952] |
+   | retry_x2 | 2 | 0.980 | [0.969, 0.987] |
+
+   The 30% error rate is an assumed, injected constant for isolating the
+   mechanism's effect — not a measurement of any real LLM's behavior.
+   Swapping `make_stochastic_mock` for `call_claude` in `run_ablation`
+   turns this from "how much does retry help against an assumed error
+   rate" into "how much does retry help against Claude's actual error
+   rate," which is the number worth citing.
+
+All three write CSVs to `caml_op_outputs/` (`narrative_subgroup_pass_rate`,
+`narrative_verifier_stress_test`, `narrative_ablation`) and are structured
+so re-running with `call_claude` in place of the mock is the only change
+needed to turn each from "mechanism validated" into "empirical result."

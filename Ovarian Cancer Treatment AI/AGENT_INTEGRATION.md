@@ -187,3 +187,185 @@ clinically: passing the three automated checks means the text didn't
 contradict the model's own numbers, not that it's sound clinical
 communication — that still needs the clinician evaluation the thesis
 already says is missing.
+
+## 5. Four technical improvements applied to the narrative agent
+
+The first version of `llm_narrative_agent.py` checked free-text narratives
+with regex, and running it against real output (not just reading the code)
+surfaced three prose-parsing failures documented in the module's
+CHANGELOG (a fixed "95%" constant flagged as an uncited number, "benefit"
+misread as a positive-direction word, and an unrealistic
+all-features-must-be-named requirement). Rather than keep patching regexes,
+the module was rewritten around four changes:
+
+1. **Structured output instead of prose parsing.** The model now submits a
+   narrative via a forced tool call (`submit_clinical_narrative`) with typed
+   fields: `sign` (enum), `cited_features` (list), `cited_values` (each
+   number tagged with *which* quantity it claims to represent, e.g.
+   `{"quantity": "tau_hat", "value": 0.007}`). Checks validate these fields
+   directly — set membership and tagged-value comparison — with no text
+   search, so there is no class of "ordinary English word collides with a
+   covariate name" bug left to have. This also fixed a correctness gap the
+   old checker had structurally: it verified a cited number was close to
+   *some* reference value, never that it was close to the *specific*
+   quantity it was cited as. Tagged values fix that by construction.
+2. **Closed-loop retry.** `generate_and_check` now loops: on failure, the
+   specific failing check(s) are fed back to the model as a targeted
+   correction request (e.g. *"cited_features must be drawn only from
+   ['age','stage']"*), and it gets up to `max_retries` attempts. Verified
+   with a test double (`make_flaky_mock`) that deliberately fails once then
+   succeeds — confirmed the loop converges in exactly 2 attempts, not just
+   unit-tested in isolation.
+3. **Scale-consistent numeric tolerance.** `check_numeric` now uses
+   `numpy.isclose`-style combined absolute+relative tolerance
+   (`max(tol * |true|, atol)`, `atol=0.005`) instead of pure relative
+   tolerance, which was unforgivingly tight near `tau_hat ~ 0` (15% of
+   0.002 allows only 0.0003 absolute deviation — tighter than the `.3f`
+   display precision used everywhere else in the pipeline).
+4. **Production hardening.** `temperature=0.0` pinned in `call_claude` (a
+   pass-rate should be reproducible run-to-run); a network-level
+   `with_backoff` wrapper distinct from the content-level retry in (2);
+   incremental CSV writes (`run_eval` appends per-patient, so a crash
+   partway through a live run over ~137 patients doesn't lose completed
+   results); a disk-backed cache keyed on `(prompt, model)` so re-running
+   after a checking-logic tweak doesn't re-spend API calls on identical
+   prompts; optional `max_workers` concurrency via `ThreadPoolExecutor`
+   (stress-tested at 8 workers / 30 patients with randomized latency — no
+   lost or duplicated rows); and a `PROMPT_VERSION` hash stamped into every
+   output row so a stored pass-rate can't silently go stale if the prompt
+   changes later.
+
+## 6. Radical improvement: calibration-aware abstention
+
+**The idea.** The thesis measures something specific: CaML-OP's nominal
+95% interval has *empirical* coverage of only 0.847 (Section "Uncertainty
+interval coverage") — the reported intervals are already known, by the
+thesis's own analysis, to be too narrow. The narrative module as specified
+was going to ignore that finding completely: it asserts a confident
+"positive"/"negative" sign claim for every patient with `tau_hat != 0`,
+using the very interval the thesis itself flagged as unreliable. Nothing
+in the original architecture connects the interval's *measured*
+reliability to whether the agent should make a directional claim at all.
+
+**What I built.** `calibrated_abstention.py` fits a split-conformal
+calibration factor — the multiplicative inflation of the reported
+half-width needed to actually achieve 95% coverage — using a calibration
+split of the semi-synthetic test set (which uniquely exposes `tau_true`,
+unlike real data). If a patient's *calibrated* interval still spans zero,
+the narrative agent is required to declare `sign: "indeterminate"` instead
+of asserting benefit or harm — wired directly into
+`llm_narrative_agent.py`'s tool schema and `check_sign`, with a dedicated
+prompt branch and a mock-narrative variant, all unit-tested including the
+adversarial case of a mock that wrongly asserts confidence when it should
+abstain (correctly rejected).
+
+**This is not a hypothetical.** I ran it against the actual pipeline
+(`code.py`'s own `fit_caml_op`, 4 runs of scenario 4, n=548):
+
+| | reported (uncalibrated) | calibrated (95% target) |
+|---|---|---|
+| coverage | 0.854 (thesis reports 0.847 — consistent) | 0.949 |
+| calibration factor | 1x (baseline) | **1.586x** half-width |
+| fraction where sign is indistinguishable from zero | 0.838 | **0.967** |
+
+Read plainly: even the narrower, *reported* interval already can't
+distinguish sign from zero for 84% of patients. Once widened enough to
+actually deliver its stated coverage, **97% of patients' estimated effects
+are not statistically distinguishable from no effect at all.** The
+end-to-end demo (`run_narrative_pipeline.py`) reproduces this on a live
+15-patient sample: all 15 correctly come back `indeterminate`, including
+one with `tau_hat = 0.174` — a large point estimate that still isn't
+reliably signed once the interval is honest about its own uncertainty.
+
+**Why this is the right place for an agent to add value, not just a
+statistics fix.** This number could have been computed as a static table
+in Chapter 5. Making it a live *decision* the narrative agent consults per
+patient — rather than a caveat printed once in the Limitations section — is
+what turns "we know our intervals under-cover" from an acknowledged
+weakness into an operational constraint the deployed system actually
+respects. It's also a natural point for the thesis to take an explicit
+position it currently doesn't: if honest calibration means the system
+can rarely assert a direction, is the right response (a) an abstention-
+heavy dashboard, (b) tightening the causal estimator until it can support
+confident claims more often, or (c) some middle ground (e.g. reporting
+magnitude-only, without sign, when calibrated CI spans zero)? The
+mechanism is built either way — which policy to adopt is a thesis
+decision, not a code one.
+
+**Designed but not built (honest scope note):** a natural extension is a
+*counterfactual-contrastive* consistency check — since CaML-OP's
+`fit_outcome_models` (added in the AIPW fix) already estimates
+`E[Y|X,T=0]` and `E[Y|X,T=1]` separately, the narrative agent could
+generate a short claim about each arm plus the ITE claim, and a fourth
+check could verify the three are mutually consistent (e.g. the arm-1 claim
+implies higher survival than the arm-0 claim iff tau_hat > 0). This would
+catch a class of internal contradiction a single-output narrative
+structurally cannot expose. I did not build this — it needs a second
+generation call per patient (cost/latency roughly doubles) and a new
+consistency-check design, and calibrated abstention already existed as a
+tighter, cheaper win using infrastructure already in the codebase. Flagging
+it here as the next candidate if the pass-rate work in item 3 (Section 4
+above) turns up systematic sign-consistency issues that abstention alone
+doesn't explain.
+
+## 7. Raising the evaluation from a pass-rate to citable evidence
+
+A single aggregate pass-rate number is a demo result, not a thesis result.
+`narrative_research_eval.py` adds three things a reviewer would actually
+ask for, all built on the existing harness rather than new infrastructure:
+
+1. **Subgroup breakdown, tying RQ2 to RQ3.** `subgroup_pass_rates()` reuses
+   `code.py`'s own `subgroup_indices()` — the identical age/stage/race
+   definitions already used for the PEHE subgroup table — so narrative
+   faithfulness can be audited on the same axes as ITE estimation accuracy.
+   `compare_subgroups()` runs a Fisher's exact test (appropriate given the
+   small per-subgroup counts here, same constraint the thesis's own
+   subgroup analysis already names) between `raceMajority` and
+   `raceMinority`. Nobody had asked whether the *narrative layer* introduces
+   its own fairness gap on top of the causal estimator's — this makes that
+   question answerable, not answered: on the mock backend every narrative
+   passes by construction, so the table currently validates the
+   *mechanism*, not a real subgroup signal. A `--live` run is what would
+   turn this into an actual RQ3-adjacent finding.
+2. **Verifier stress test as a diagnostic classifier, not a demo.** The
+   single hand-written adversarial example from Section 5 proved the
+   checks *can* catch a lie; it didn't validate them systematically.
+   `run_verifier_stress_test()` builds twelve cases with known ground-truth
+   faithfulness by construction (wrong sign, hallucinated feature,
+   hallucinated quantity tag, numeric error, empty citation, mixed
+   true/hallucinated citation, correct and incorrect abstention) and
+   reports sensitivity/specificity the way a diagnostic test is validated —
+   distinguishing the dangerous error (an unfaithful narrative that slips
+   through, a false negative) from the merely annoying one (a faithful
+   narrative wrongly rejected, a false positive). Result on the current
+   checks: 12/12 correct, sensitivity = specificity = 1.0 on this case set.
+   That's a statement about coverage of *this* case set, not a proof of
+   completeness — it's a regression suite, and it should grow every time a
+   new failure mode is found (the way items 1-4 in Section 5 were each
+   found by running the thing, not by inspection).
+3. **Ablation quantifying what retry actually buys.** The deterministic
+   `mock_llm` never errs, so it structurally cannot demonstrate the retry
+   loop's value — there's nothing to recover from. `make_stochastic_mock()`
+   injects a configurable, explicit error rate (wrong sign / hallucinated
+   feature / numeric error, chosen uniformly) so `run_ablation()` can
+   measure pass-rate as a function of `max_retries` under controlled
+   conditions. At an assumed 30% per-call error rate (n=1000 trials per
+   configuration, Wilson CIs):
+
+   | config | max_retries | pass_rate | 95% CI |
+   |---|---|---|---|
+   | no_retry | 0 | 0.765 | [0.738, 0.790] |
+   | retry_x1 | 1 | 0.939 | [0.922, 0.952] |
+   | retry_x2 | 2 | 0.980 | [0.969, 0.987] |
+
+   The 30% error rate is an assumed, injected constant for isolating the
+   mechanism's effect — not a measurement of any real LLM's behavior.
+   Swapping `make_stochastic_mock` for `call_claude` in `run_ablation`
+   turns this from "how much does retry help against an assumed error
+   rate" into "how much does retry help against Claude's actual error
+   rate," which is the number worth citing.
+
+All three write CSVs to `caml_op_outputs/` (`narrative_subgroup_pass_rate`,
+`narrative_verifier_stress_test`, `narrative_ablation`) and are structured
+so re-running with `call_claude` in place of the mock is the only change
+needed to turn each from "mechanism validated" into "empirical result."

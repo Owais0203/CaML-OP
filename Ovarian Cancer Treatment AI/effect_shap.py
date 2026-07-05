@@ -86,6 +86,19 @@ class CaMLOPEffectModel:
         tau_dr = self.dr_model.effect(X_a)
         return 0.5 * np.asarray(tau_r) + 0.5 * np.asarray(tau_dr)
 
+    def predict_interval(self, X_raw: np.ndarray, alpha: float = 0.05):
+        """Approximate uncertainty interval, mirroring code.py's
+        fit_caml_op exactly: ForestDRLearner's native CI half-width widened
+        10% to acknowledge ensemble noise (thesis: "Ensemble and
+        uncertainty reporting"). Returns (lo, hi) arrays over the ensemble
+        point estimate from predict()."""
+        X_raw = np.atleast_2d(X_raw)
+        X_a = self.enc.transform(X_raw)
+        tau = self.predict(X_raw)
+        lo_dr, hi_dr = self.dr_model.effect_interval(X_a, alpha=alpha)
+        half_width = (np.asarray(hi_dr) - np.asarray(lo_dr)) / 2 * 1.10
+        return tau - half_width, tau + half_width
+
 
 def compute_effect_shap(model: CaMLOPEffectModel, X_background: np.ndarray,
                         X_explain: np.ndarray, n_background: int = 50,

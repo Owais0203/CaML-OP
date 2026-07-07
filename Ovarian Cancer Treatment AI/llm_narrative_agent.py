@@ -58,16 +58,52 @@ None of these were faithfulness failures -- they were prose-parsing
 failures. Structured output (the model declares sign/features/values as
 typed fields via a tool call, instead of us inferring them from text)
 removes the entire class: there is no text to misparse.
+
+ARCHITECTURE UPDATE (composable verifiers, escalation, majority vote)
+---------------------------------------------------------------------------
+Three further changes, aimed at the gaps a single generate->check function
+has once you want to extend it rather than just run it:
+
+  - Verifiers are now a list (default_verifiers()), not three hardcoded
+    checks wired into the loop. A new check (e.g. the counterfactual-
+    consistency check designed but not built in AGENT_INTEGRATION.md
+    Section 6) is registered by appending a Verifier, not by editing
+    generate_and_check or _feedback_for.
+  - NarrativeStatus.ESCALATED is a first-class result state distinct from
+    a bare False: exhausting max_retries without passing every verifier
+    means "route to a human reviewer," not "silently mark pass_overall
+    False in a CSV row."
+  - make_majority_vote_llm() combines multiple independent backends (e.g.
+    call_claude + call_openrouter against different model families) via
+    plurality vote on sign / strict-majority on cited_features / median on
+    cited_values, and drops in as just another llm_fn -- no change to the
+    retry loop or checks needed. This mirrors CaML-OP's own causal-side
+    design (ensembling R+DR because neither is in its sweet spot alone)
+    applied to the generation side, which previously had no analogous
+    ensembling.
+
+Deliberately not done in this pass: converting the retry loop itself into
+a genuine multi-turn tool-use conversation (assistant tool_use -> tool_result
+-> next turn) instead of re-serializing the previous attempt into prompt
+text. That would improve prompt-cache reuse and give the model native
+memory of its prior attempt, but it requires changing the llm_fn interface
+signature that every backend and make_majority_vote_llm currently depends
+on (a stateless (prompt, inputs) -> NarrativeOutput function). Flagged as
+the next architectural change, scoped separately so it doesn't destabilize
+the backends/tests added here.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import os
+import statistics
 import threading
 import time
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, asdict
+from enum import Enum
 from typing import Callable, Optional
 
 import pandas as pd
@@ -310,6 +346,131 @@ def call_claude(prompt: str, inputs: NarrativeInputs,
     raise RuntimeError("Model did not call submit_clinical_narrative")
 
 
+def _tool_as_openai_function() -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": NARRATIVE_TOOL["name"],
+            "description": NARRATIVE_TOOL["description"],
+            "parameters": NARRATIVE_TOOL["input_schema"],
+        },
+    }
+
+
+def call_openrouter(prompt: str, inputs: NarrativeInputs,
+                    model: str = "openai/gpt-4o-mini", temperature: float = 0.0,
+                    max_tokens: int = 400) -> NarrativeOutput:
+    """Real narrative generation via OpenRouter (openrouter.ai), which
+    proxies many providers behind one OpenAI-compatible API. Requires the
+    `openai` package and OPENROUTER_API_KEY. `model` is any OpenRouter model
+    slug that supports tool/function calling, e.g. "openai/gpt-4o-mini",
+    "meta-llama/llama-3.1-70b-instruct", "google/gemini-1.5-pro".
+
+    This backend's main purpose isn't "an alternative to Claude" in
+    isolation -- it's a second, structurally independent model to combine
+    with call_claude (or other OpenRouter models) via make_majority_vote_llm
+    below, so a hallucination isn't only ever checked against itself.
+    """
+    import openai
+    client = openai.OpenAI(base_url="https://openrouter.ai/api/v1",
+                          api_key=os.environ["OPENROUTER_API_KEY"])
+    resp = client.chat.completions.create(
+        model=model, temperature=temperature, max_tokens=max_tokens,
+        messages=[{"role": "user", "content": prompt}],
+        tools=[_tool_as_openai_function()],
+        tool_choice={"type": "function", "function": {"name": NARRATIVE_TOOL["name"]}},
+    )
+    tool_calls = resp.choices[0].message.tool_calls
+    if not tool_calls:
+        raise RuntimeError(f"Model {model} did not call {NARRATIVE_TOOL['name']}")
+    data = json.loads(tool_calls[0].function.arguments)
+    return NarrativeOutput(
+        narrative=data["narrative"], sign=data["sign"],
+        cited_features=list(data.get("cited_features", [])),
+        cited_values=[CitedValue(**cv) for cv in data.get("cited_values", [])],
+    )
+
+
+def _majority_sign(outputs: list) -> str:
+    counts = Counter(o.sign for o in outputs)
+    top = max(counts.values())
+    winners = [s for s, c in counts.items() if c == top]
+    if len(winners) == 1:
+        return winners[0]
+    # Any tie -- including, and especially, a straight positive-vs-negative
+    # split -- resolves to "indeterminate". Falling back to an arbitrary
+    # winner (e.g. whichever backend ran first) on exactly the case where
+    # the models disagree on direction would be the overconfidence
+    # calibrated_abstention.py exists to prevent elsewhere in this pipeline.
+    return "indeterminate"
+
+
+def _majority_features(outputs: list) -> list:
+    counts = Counter(f for o in outputs for f in o.cited_features)
+    threshold = len(outputs) / 2
+    return [f for f, c in counts.items() if c > threshold]
+
+
+def _majority_values(outputs: list) -> list:
+    by_quantity: dict = {}
+    for o in outputs:
+        for cv in o.cited_values:
+            by_quantity.setdefault(cv.quantity, []).append(cv.value)
+    threshold = len(outputs) / 2
+    return [CitedValue(q, statistics.median(vals))
+           for q, vals in by_quantity.items() if len(vals) > threshold]
+
+
+def make_majority_vote_llm(backends: list) -> Callable[[str, NarrativeInputs], NarrativeOutput]:
+    """Combine N independent backends (e.g. [call_claude, call_openrouter
+    with a Llama model, call_openrouter with a Gemini model]) via majority
+    vote into a single NarrativeOutput that drops into generate_and_check /
+    run_eval completely unchanged -- majority voting is just another
+    llm_fn, reusing the exact same retry loop and verifiers. On a retry,
+    every backend regenerates against the same feedback and the vote is
+    retaken, with no special-casing needed in generate_and_check.
+
+    Combination rule, applied independently per field:
+      - sign: plurality vote; a tie is broken toward "indeterminate" (see
+        _majority_sign) rather than an arbitrary winner.
+      - cited_features: kept only if cited by a STRICT MAJORITY of
+        backends -- one outlier model's hallucinated feature is outvoted
+        rather than silently propagated into the final narrative.
+      - cited_values: median across backends that cited a given quantity
+        tag, again requiring a strict majority to include the tag at all.
+      - narrative (prose): taken from whichever backend's own sign matches
+        the consensus sign. Synthesizing prose across models is out of
+        scope here -- the checks verify the structured fields, not the
+        prose, so this is a reasonable simplification, not a gap in what's
+        actually being verified.
+
+    This is diversity ensembling, not resampling: querying one model N
+    times at temperature=0 returns N identical outputs and votes trivially.
+    The intended use is backends from *different* model families, so one
+    model's systematic bias or hallucination pattern is outvoted by the
+    others rather than being the only opinion available -- the same
+    rationale CaML-OP's own R+DR ensemble uses on the causal-estimation
+    side (thesis: "Ensemble and uncertainty reporting").
+
+    Caveat: caching in run_eval() memoizes the *combined* output keyed on
+    the shared prompt, not each backend's individual call, so an
+    interrupted majority-vote run doesn't get partial-backend cache reuse.
+    """
+    if len(backends) < 2:
+        raise ValueError("majority vote needs at least 2 backends")
+
+    def vote(prompt: str, inputs: NarrativeInputs) -> NarrativeOutput:
+        outputs = [backend(prompt, inputs) for backend in backends]
+        sign = _majority_sign(outputs)
+        features = _majority_features(outputs)
+        values = _majority_values(outputs)
+        representative = next((o for o in outputs if o.sign == sign), outputs[0])
+        return NarrativeOutput(narrative=representative.narrative, sign=sign,
+                               cited_features=features, cited_values=values)
+
+    return vote
+
+
 def with_backoff(llm_fn: Callable, retries: int = 3, base_delay: float = 1.0):
     """Wraps an llm_fn with exponential backoff for transient API errors
     (network blips, rate limits) -- distinct from the faithfulness retry
@@ -376,68 +537,107 @@ def check_numeric(output: NarrativeOutput, inputs: NarrativeInputs,
     return True
 
 
+class NarrativeStatus(str, Enum):
+    PASSED = "passed"          # all verifiers passed within max_retries attempts
+    ESCALATED = "escalated"    # exhausted retries without passing every verifier;
+                              # requires human review, must not be auto-displayed
+
+
+@dataclass
+class Verifier:
+    """A single named check, decoupled from generate_and_check's loop so a
+    new check (e.g. the counterfactual-consistency check designed but not
+    built in AGENT_INTEGRATION.md Section 6) is registered by appending to
+    default_verifiers(), not by editing the loop or a hardcoded tuple."""
+    name: str
+    check: Callable[[NarrativeOutput, NarrativeInputs], bool]
+    feedback: Callable[[NarrativeInputs], str]
+
+
+def _sign_feedback(inputs: NarrativeInputs) -> str:
+    if inputs.must_abstain:
+        return ("sign must be 'indeterminate': the calibrated interval for this "
+               "patient spans zero, so no directional claim is statistically "
+               "supportable regardless of tau_hat's raw sign.")
+    expected = "positive" if inputs.tau_hat > 0 else "negative"
+    return f"sign must be '{expected}' (tau_hat={inputs.tau_hat:+.3f})."
+
+
+def _features_feedback(inputs: NarrativeInputs) -> str:
+    return f"cited_features must be drawn only from {sorted(inputs.true_drivers())}."
+
+
+def _numeric_feedback(inputs: NarrativeInputs) -> str:
+    return (f"one or more cited_values did not match its declared quantity "
+           f"within tolerance; valid quantities are {sorted(inputs.quantities())}.")
+
+
+def default_verifiers(tol: float = 0.15, atol: float = 0.005) -> list:
+    """The three checks the thesis specifies, as a composable list. Pass a
+    longer list (e.g. this list plus a new Verifier) to generate_and_check's
+    `verifiers` argument to extend the gate without touching the loop."""
+    return [
+        Verifier("sign", check_sign, _sign_feedback),
+        Verifier("features", check_features, _features_feedback),
+        Verifier("numeric", lambda output, inp: check_numeric(output, inp, tol=tol, atol=atol),
+                _numeric_feedback),
+    ]
+
+
 @dataclass
 class NarrativeResult:
     inputs: NarrativeInputs
     output: NarrativeOutput
-    pass_sign: bool
-    pass_features: bool
-    pass_numeric: bool
+    checks: dict                          # {"sign": bool, "features": bool, "numeric": bool, ...}
+    status: NarrativeStatus = NarrativeStatus.PASSED
     attempts: int = 1
 
     @property
     def passed(self) -> bool:
-        return self.pass_sign and self.pass_features and self.pass_numeric
+        return self.status == NarrativeStatus.PASSED
 
     @property
     def narrative(self) -> str:
         return self.output.narrative
 
+    # Backward-compatible accessors for the three original named checks --
+    # existing call sites (run_eval, narrative_research_eval.py, tests) read
+    # r.pass_sign / r.pass_features / r.pass_numeric directly.
+    @property
+    def pass_sign(self) -> bool:
+        return self.checks.get("sign", True)
 
-def _check(output: NarrativeOutput, inputs: NarrativeInputs,
-          tol: float, atol: float) -> tuple:
-    return (check_sign(output, inputs),
-            check_features(output, inputs),
-            check_numeric(output, inputs, tol=tol, atol=atol))
+    @property
+    def pass_features(self) -> bool:
+        return self.checks.get("features", True)
 
-
-def _feedback_for(pass_sign: bool, pass_features: bool, pass_numeric: bool,
-                  inputs: NarrativeInputs) -> str:
-    msgs = []
-    if not pass_sign:
-        if inputs.must_abstain:
-            msgs.append("sign must be 'indeterminate': the calibrated interval "
-                       "for this patient spans zero, so no directional claim "
-                       "is statistically supportable regardless of tau_hat's raw sign.")
-        else:
-            expected = "positive" if inputs.tau_hat > 0 else "negative"
-            msgs.append(f"sign must be '{expected}' (tau_hat={inputs.tau_hat:+.3f}).")
-    if not pass_features:
-        msgs.append(f"cited_features must be drawn only from {sorted(inputs.true_drivers())}.")
-    if not pass_numeric:
-        msgs.append(f"one or more cited_values did not match its declared quantity "
-                    f"within tolerance; valid quantities are {sorted(inputs.quantities())}.")
-    return " ".join(msgs)
+    @property
+    def pass_numeric(self) -> bool:
+        return self.checks.get("numeric", True)
 
 
 def generate_and_check(inputs: NarrativeInputs,
                        llm_fn: Callable[[str, NarrativeInputs], NarrativeOutput] = mock_llm,
                        tol: float = 0.15, atol: float = 0.005,
-                       max_retries: int = 2) -> NarrativeResult:
+                       max_retries: int = 2,
+                       verifiers: Optional[list] = None) -> NarrativeResult:
     """Generate -> check -> (on failure) feed back the specific failing
-    check(s) and regenerate, up to max_retries additional attempts."""
+    check(s) and regenerate, up to max_retries additional attempts. If every
+    attempt fails, the result is NarrativeStatus.ESCALATED rather than
+    silently reporting a False -- a distinct state a caller can route to a
+    human reviewer instead of a dashboard."""
+    verifiers = verifiers if verifiers is not None else default_verifiers(tol, atol)
     feedback, previous = None, None
+    checks, output = {}, None
     for attempt in range(1, max_retries + 2):  # first attempt + max_retries retries
         prompt = build_prompt(inputs, feedback=feedback, previous=previous)
         output = llm_fn(prompt, inputs)
-        pass_sign, pass_features, pass_numeric = _check(output, inputs, tol, atol)
-        if pass_sign and pass_features and pass_numeric:
-            return NarrativeResult(inputs, output, pass_sign, pass_features,
-                                   pass_numeric, attempts=attempt)
-        feedback = _feedback_for(pass_sign, pass_features, pass_numeric, inputs)
+        checks = {v.name: v.check(output, inputs) for v in verifiers}
+        if all(checks.values()):
+            return NarrativeResult(inputs, output, checks, NarrativeStatus.PASSED, attempts=attempt)
+        feedback = " ".join(v.feedback(inputs) for v in verifiers if not checks[v.name])
         previous = output
-    return NarrativeResult(inputs, output, pass_sign, pass_features,
-                           pass_numeric, attempts=attempt)
+    return NarrativeResult(inputs, output, checks, NarrativeStatus.ESCALATED, attempts=attempt)
 
 
 # ---------------------------------------------------------------------------
@@ -480,7 +680,8 @@ class _DiskCache:
 def run_eval(patient_rows: list, llm_fn: Callable = mock_llm,
             tol: float = 0.15, atol: float = 0.005, max_retries: int = 2,
             out_csv: Optional[str] = None, cache_path: Optional[str] = None,
-            model_name: str = "unknown", max_workers: int = 1) -> pd.DataFrame:
+            model_name: str = "unknown", max_workers: int = 1,
+            verifiers: Optional[list] = None) -> pd.DataFrame:
     """Batch faithfulness evaluation across patients, producing the
     empirical pass-rate the thesis (RQ2 / Limitations) flags as unreported.
 
@@ -513,21 +714,25 @@ def run_eval(patient_rows: list, llm_fn: Callable = mock_llm,
 
     def process(inp: NarrativeInputs) -> dict:
         r = generate_and_check(inp, llm_fn=cached_llm_fn, tol=tol, atol=atol,
-                               max_retries=max_retries)
-        return {
+                               max_retries=max_retries, verifiers=verifiers)
+        row = {
             "patient_id": inp.patient_id,
             "tau_hat": inp.tau_hat,
             "narrative": r.narrative,
             "sign": r.output.sign,
             "cited_features": ";".join(r.output.cited_features),
             "cited_values": json.dumps(asdict_cited(r.output.cited_values)),
-            "pass_sign": r.pass_sign,
-            "pass_features": r.pass_features,
-            "pass_numeric": r.pass_numeric,
-            "pass_overall": r.passed,
-            "attempts": r.attempts,
-            "prompt_version": PROMPT_VERSION,
         }
+        # One pass_<name> column per verifier actually run, so a caller that
+        # passes a longer `verifiers` list (a new check appended) gets a new
+        # column automatically rather than needing run_eval edited too.
+        for name, val in r.checks.items():
+            row[f"pass_{name}"] = val
+        row["pass_overall"] = r.passed
+        row["status"] = r.status.value  # "passed" or "escalated" -- see NarrativeStatus
+        row["attempts"] = r.attempts
+        row["prompt_version"] = PROMPT_VERSION
+        return row
 
     def append_row(row: dict):
         rows.append(row)

@@ -28,9 +28,10 @@ import os
 import numpy as np
 from sklearn.model_selection import train_test_split
 
-from code import load_tcga, generate_dgp
+from code import load_tcga, generate_dgp, fit_outcome_models, subgroup_indices
 from effect_shap import CaMLOPEffectModel, compute_effect_shap, top_features, FEATURE_NAMES
-from calibrated_abstention import fit_calibration_factor, should_abstain
+from calibrated_abstention import (fit_calibration_factor, fit_calibration_factors_by_subgroup,
+                                   patient_calibration_factor, should_abstain)
 from llm_narrative_agent import NarrativeInputs, run_eval, mock_llm, call_claude
 
 OUT_DIR = "caml_op_outputs"
@@ -68,20 +69,41 @@ def prepare_patient_rows(n_patients: int = 30, seed: int = 42, verbose: bool = T
     log(f"Fitting CaML-OP effect model on {len(X_tr)} training patients...")
     model = CaMLOPEffectModel(seed=seed).fit(X_tr, T_tr, Y_tr)
     tau_hat = model.predict(X_sample)
+    tau_r, tau_dr = model.predict_components(X_sample)
     ci_lo, ci_hi = model.predict_interval(X_sample)
     half_width = (ci_hi - ci_lo) / 2
 
-    log(f"Fitting split-conformal calibration factor on {len(cal_idx)} held-out "
+    log("Fitting arm-level outcome models (mu0/mu1) for counterfactual "
+        "consistency checking (code.py's fit_outcome_models, from the AIPW fix)...")
+    m0, m1 = fit_outcome_models(X_tr, T_tr, Y_tr, seed)
+    mu0 = m0.predict_proba(X_sample)[:, 1]
+    mu1 = m1.predict_proba(X_sample)[:, 1]
+
+    log(f"Fitting subgroup-conditional calibration factors on {len(cal_idx)} held-out "
         f"test patients disjoint from the {n_patients} narrated above...")
     tau_hat_cal = model.predict(X_te[cal_idx])
     cal_lo, cal_hi = model.predict_interval(X_te[cal_idx])
-    calib_factor = fit_calibration_factor(
-        tau_true_te[cal_idx], tau_hat_cal, (cal_hi - cal_lo) / 2, target_coverage=0.95)
-    must_abstain = np.array([
-        should_abstain(tau_hat[i], half_width[i], calib_factor)
+    cal_half_width = (cal_hi - cal_lo) / 2
+    global_calib_factor = fit_calibration_factor(
+        tau_true_te[cal_idx], tau_hat_cal, cal_half_width, target_coverage=0.95)
+    cal_groups = subgroup_indices(X_te[cal_idx])
+    subgroup_factors = fit_calibration_factors_by_subgroup(
+        tau_true_te[cal_idx], tau_hat_cal, cal_half_width, cal_groups, target_coverage=0.95)
+
+    sample_groups = subgroup_indices(X_sample)
+    calib_factor_per_patient = np.array([
+        patient_calibration_factor(
+            [g for g, mask in sample_groups.items() if mask[i]],
+            subgroup_factors, global_calib_factor)
         for i in range(n_patients)
     ])
-    log(f"Calibration factor: {calib_factor:.3f}x reported half-width. "
+    must_abstain = np.array([
+        should_abstain(tau_hat[i], half_width[i], calib_factor_per_patient[i])
+        for i in range(n_patients)
+    ])
+    log(f"Global calibration factor: {global_calib_factor:.3f}x; per-patient factors "
+        f"(subgroup-conditional) range {calib_factor_per_patient.min():.3f}-"
+        f"{calib_factor_per_patient.max():.3f}x reported half-width. "
         f"{must_abstain.sum()}/{n_patients} sampled patients must abstain "
         f"from a directional sign claim once calibrated.")
 
@@ -99,11 +121,15 @@ def prepare_patient_rows(n_patients: int = 30, seed: int = 42, verbose: bool = T
             tau_hat=float(tau_hat[i]),
             ci_lo=float(ci_lo[i]),
             ci_hi=float(ci_hi[i]),
+            mu0=float(mu0[i]),
+            mu1=float(mu1[i]),
+            tau_r=float(tau_r[i]),
+            tau_dr=float(tau_dr[i]),
             top_positive=pos,
             top_negative=neg,
             must_abstain=bool(must_abstain[i]),
         ))
-    return patient_rows, X_sample, sample_idx, calib_factor
+    return patient_rows, X_sample, sample_idx, global_calib_factor
 
 
 def main(n_patients: int = 30, seed: int = 42, live: bool = False):

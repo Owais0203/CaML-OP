@@ -67,3 +67,47 @@ def should_abstain(tau_hat: float, half_width: float,
     reported interval."""
     lo, hi = calibrated_interval(tau_hat, half_width, calibration_factor)
     return lo <= 0 <= hi
+
+
+def fit_calibration_factors_by_subgroup(tau_true: np.ndarray, tau_hat: np.ndarray,
+                                        half_width: np.ndarray, subgroup_masks: dict,
+                                        target_coverage: float = 0.95,
+                                        min_n: int = 20) -> dict:
+    """A single global calibration factor (fit_calibration_factor) assumes
+    the causal estimator is equally reliable everywhere. It isn't -- the
+    subgroup PEHE table (thesis: "Subgroup analysis") already shows
+    accuracy varies by age/stage/race. A patient in a subgroup with worse
+    empirical coverage should get a *more* conservative (larger) inflation
+    factor than one in a well-calibrated subgroup, not the cohort average.
+
+    subgroup_masks: {name -> boolean mask}, e.g. code.py's
+    subgroup_indices() output, evaluated on the SAME calibration cohort
+    that tau_true/tau_hat/half_width describe.
+
+    Falls back to the global factor for any subgroup with fewer than
+    min_n calibration points (same guard subgroup_pass_rates uses
+    elsewhere in this pipeline) to avoid a noisy per-subgroup quantile
+    estimate on a small minority group.
+    """
+    global_factor = fit_calibration_factor(tau_true, tau_hat, half_width, target_coverage)
+    factors = {}
+    for name, mask in subgroup_masks.items():
+        mask = np.asarray(mask)
+        if mask.sum() < min_n:
+            factors[name] = global_factor
+            continue
+        factors[name] = fit_calibration_factor(
+            tau_true[mask], tau_hat[mask], half_width[mask], target_coverage)
+    return factors
+
+
+def patient_calibration_factor(patient_subgroups: list, factors_by_subgroup: dict,
+                               global_factor: float) -> float:
+    """A patient belongs to several overlapping subgroups at once (an age
+    band AND a stage band AND a race group). Takes the MOST CONSERVATIVE
+    (largest) factor across every subgroup the patient belongs to -- if a
+    patient is in *any* subgroup with known worse coverage, they get the
+    safer (wider) treatment, not an average across their memberships."""
+    applicable = [factors_by_subgroup[g] for g in patient_subgroups
+                 if g in factors_by_subgroup]
+    return max(applicable) if applicable else global_factor

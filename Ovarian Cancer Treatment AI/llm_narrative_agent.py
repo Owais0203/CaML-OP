@@ -59,9 +59,9 @@ failures. Structured output (the model declares sign/features/values as
 typed fields via a tool call, instead of us inferring them from text)
 removes the entire class: there is no text to misparse.
 
-ARCHITECTURE UPDATE (composable verifiers, escalation, majority vote)
+ARCHITECTURE UPDATE (composable verifiers, escalation)
 ---------------------------------------------------------------------------
-Three further changes, aimed at the gaps a single generate->check function
+Two further changes, aimed at the gaps a single generate->check function
 has once you want to extend it rather than just run it:
 
   - Verifiers are now a list (default_verifiers()), not three hardcoded
@@ -73,36 +73,43 @@ has once you want to extend it rather than just run it:
     a bare False: exhausting max_retries without passing every verifier
     means "route to a human reviewer," not "silently mark pass_overall
     False in a CSV row."
-  - make_majority_vote_llm() combines multiple independent generations
-    (either multiple backends, e.g. call_claude + call_openrouter against
-    different model families, or n_samples > 1 repeated calls to a single
-    backend -- self-consistency, see self_consistency_llm() -- or both) via
-    plurality vote on sign / strict-majority on cited_features / median on
-    cited_values, and drops in as just another llm_fn -- no change to the
-    retry loop or checks needed. This mirrors CaML-OP's own causal-side
-    design (ensembling R+DR because neither is in its sweet spot alone)
-    applied to the generation side, which previously had no analogous
-    ensembling.
 
-Deliberately not done in this pass: converting the retry loop itself into
-a genuine multi-turn tool-use conversation (assistant tool_use -> tool_result
--> next turn) instead of re-serializing the previous attempt into prompt
-text. That would improve prompt-cache reuse and give the model native
-memory of its prior attempt, but it requires changing the llm_fn interface
-signature that every backend and make_majority_vote_llm currently depends
-on (a stateless (prompt, inputs) -> NarrativeOutput function). Flagged as
-the next architectural change, scoped separately so it doesn't destabilize
-the backends/tests added here.
+TRIED AND REMOVED: majority-vote ensembling
+---------------------------------------------------------------------------
+A majority-vote mechanism (make_majority_vote_llm / self_consistency_llm /
+call_openrouter) was built and then removed after a head-to-head comparison
+against the retry loop above, under an identical injected 30% error rate
+(n=1000 trials per configuration; see AGENT_INTEGRATION.md for the full
+table). Retry dominated on both pass-rate and cost in every configuration
+tested, including the one scenario majority vote was hypothesized to
+uniquely help with (a single backend with a systematic, repeated bias):
+
+    retry_x2                                    0.976 pass-rate, 1.40 calls/patient
+    vote_n5 (self-consistency, same model)      0.979 pass-rate, 5.00 calls/patient
+    retry_x4 (retrying a SYSTEMATICALLY-biased backend)  1.000 pass-rate, 1.45 calls/patient
+    vote_3backends (2 clean + 1 systematically-biased)   0.973 pass-rate, 3.00 calls/patient
+
+The reason is structural: retry has an adaptive stopping rule (stop the
+moment one attempt passes all verifiers), so its average cost stays near
+1.4 calls even at max_retries=2; majority vote always pays its full fixed
+N regardless of whether the first sample alone would have passed. For
+structured, checkable output like this narrative -- where a failing
+attempt gets *specific* feedback about exactly which claim was wrong,
+rather than being an unexplained wrong answer -- adaptive retry is
+strictly more sample-efficient than blind voting. Cross-model majority
+voting could still matter for failure modes retry structurally can't fix
+(e.g. every model in the ensemble sharing a training-data-driven bias that
+targeted feedback doesn't correct), but that's a different, unverified
+claim from the one tested here, and isn't reason enough to carry the
+mechanism's cost and complexity in the default pipeline on spec.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import os
-import statistics
 import threading
 import time
-from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, asdict
 from enum import Enum
@@ -346,172 +353,6 @@ def call_claude(prompt: str, inputs: NarrativeInputs,
                 cited_values=[CitedValue(**cv) for cv in data.get("cited_values", [])],
             )
     raise RuntimeError("Model did not call submit_clinical_narrative")
-
-
-def _tool_as_openai_function() -> dict:
-    return {
-        "type": "function",
-        "function": {
-            "name": NARRATIVE_TOOL["name"],
-            "description": NARRATIVE_TOOL["description"],
-            "parameters": NARRATIVE_TOOL["input_schema"],
-        },
-    }
-
-
-def call_openrouter(prompt: str, inputs: NarrativeInputs,
-                    model: str = "openai/gpt-4o-mini", temperature: float = 0.0,
-                    max_tokens: int = 400) -> NarrativeOutput:
-    """Real narrative generation via OpenRouter (openrouter.ai), which
-    proxies many providers behind one OpenAI-compatible API. Requires the
-    `openai` package and OPENROUTER_API_KEY. `model` is any OpenRouter model
-    slug that supports tool/function calling, e.g. "openai/gpt-4o-mini",
-    "meta-llama/llama-3.1-70b-instruct", "google/gemini-1.5-pro".
-
-    This backend's main purpose isn't "an alternative to Claude" in
-    isolation -- it's a second, structurally independent model to combine
-    with call_claude (or other OpenRouter models) via make_majority_vote_llm
-    below, so a hallucination isn't only ever checked against itself.
-    """
-    import openai
-    client = openai.OpenAI(base_url="https://openrouter.ai/api/v1",
-                          api_key=os.environ["OPENROUTER_API_KEY"])
-    resp = client.chat.completions.create(
-        model=model, temperature=temperature, max_tokens=max_tokens,
-        messages=[{"role": "user", "content": prompt}],
-        tools=[_tool_as_openai_function()],
-        tool_choice={"type": "function", "function": {"name": NARRATIVE_TOOL["name"]}},
-    )
-    tool_calls = resp.choices[0].message.tool_calls
-    if not tool_calls:
-        raise RuntimeError(f"Model {model} did not call {NARRATIVE_TOOL['name']}")
-    data = json.loads(tool_calls[0].function.arguments)
-    return NarrativeOutput(
-        narrative=data["narrative"], sign=data["sign"],
-        cited_features=list(data.get("cited_features", [])),
-        cited_values=[CitedValue(**cv) for cv in data.get("cited_values", [])],
-    )
-
-
-def _majority_sign(outputs: list) -> str:
-    counts = Counter(o.sign for o in outputs)
-    top = max(counts.values())
-    winners = [s for s, c in counts.items() if c == top]
-    if len(winners) == 1:
-        return winners[0]
-    # Any tie -- including, and especially, a straight positive-vs-negative
-    # split -- resolves to "indeterminate". Falling back to an arbitrary
-    # winner (e.g. whichever backend ran first) on exactly the case where
-    # the models disagree on direction would be the overconfidence
-    # calibrated_abstention.py exists to prevent elsewhere in this pipeline.
-    return "indeterminate"
-
-
-def _majority_features(outputs: list) -> list:
-    counts = Counter(f for o in outputs for f in o.cited_features)
-    threshold = len(outputs) / 2
-    return [f for f, c in counts.items() if c > threshold]
-
-
-def _majority_values(outputs: list) -> list:
-    by_quantity: dict = {}
-    for o in outputs:
-        for cv in o.cited_values:
-            by_quantity.setdefault(cv.quantity, []).append(cv.value)
-    threshold = len(outputs) / 2
-    return [CitedValue(q, statistics.median(vals))
-           for q, vals in by_quantity.items() if len(vals) > threshold]
-
-
-def make_majority_vote_llm(backends: list, n_samples: int = 1,
-                          max_workers: int = 1) -> Callable[[str, NarrativeInputs], NarrativeOutput]:
-    """Combine independent generations into a single NarrativeOutput via
-    majority vote. Drops in as just another llm_fn -- generate_and_check /
-    run_eval need no changes, and on a retry every call regenerates against
-    the same feedback and the vote is retaken automatically.
-
-    Two ways to get multiple votes, and they compose:
-      - Multiple backends (cross-model ensembling): backends=[call_claude,
-        call_openrouter], n_samples=1 -- one call to each of N different
-        models. One model's systematic bias or hallucination pattern is
-        outvoted by the others.
-      - n_samples > 1 (self-consistency, Wang et al. 2022): backends=[llm],
-        n_samples=5 -- five independent calls to the SAME backend. This
-        only produces distinct votes if the backend samples at
-        temperature > 0 -- e.g.
-        functools.partial(call_claude, temperature=0.7). The default
-        call_claude uses temperature=0.0 (for reproducibility elsewhere in
-        this pipeline) and would vote trivially with itself n_samples
-        times at temperature=0; see self_consistency_llm() below for the
-        common case of one backend, several samples.
-      - Both together: len(backends) * n_samples total independent votes,
-        e.g. 3 samples each from 2 different models = 6 votes.
-
-    Combination rule, applied independently per field across however many
-    votes were collected:
-      - sign: plurality vote; ANY tie (including a straight
-        positive-vs-negative split -- the case that matters most) resolves
-        to "indeterminate" rather than an arbitrary winner (see
-        _majority_sign).
-      - cited_features: kept only if cited by a STRICT MAJORITY of votes --
-        one outlier's hallucinated feature is outvoted rather than silently
-        propagated into the final narrative.
-      - cited_values: median across votes that cited a given quantity tag,
-        again requiring a strict majority to include the tag at all.
-      - narrative (prose): taken from whichever vote's own sign matches the
-        consensus sign. Synthesizing prose across N generations is out of
-        scope here -- the checks verify the structured fields, not the
-        prose, so this is a reasonable simplification, not a gap in what's
-        actually being verified.
-
-    max_workers > 1 runs the backends*n_samples calls concurrently via a
-    thread pool -- each is an independent network request, so this cuts
-    wall-clock latency roughly proportionally. Defaults to 1 (sequential)
-    for deterministic test behavior; set higher for a live run (e.g.
-    max_workers=n_samples).
-
-    Caveat: caching in run_eval() memoizes the *combined* output keyed on
-    the shared prompt, not each individual call, so an interrupted
-    majority-vote run doesn't get partial-vote cache reuse.
-    """
-    total_votes = len(backends) * n_samples
-    if total_votes < 2:
-        raise ValueError(f"majority vote needs at least 2 total calls, got "
-                        f"{len(backends)} backend(s) x {n_samples} sample(s) = {total_votes}")
-    calls = [backend for backend in backends for _ in range(n_samples)]
-
-    def vote(prompt: str, inputs: NarrativeInputs) -> NarrativeOutput:
-        if max_workers <= 1:
-            outputs = [backend(prompt, inputs) for backend in calls]
-        else:
-            with ThreadPoolExecutor(max_workers=max_workers) as pool:
-                futures = [pool.submit(backend, prompt, inputs) for backend in calls]
-                outputs = [f.result() for f in futures]
-        sign = _majority_sign(outputs)
-        features = _majority_features(outputs)
-        values = _majority_values(outputs)
-        representative = next((o for o in outputs if o.sign == sign), outputs[0])
-        return NarrativeOutput(narrative=representative.narrative, sign=sign,
-                               cited_features=features, cited_values=values)
-
-    return vote
-
-
-def self_consistency_llm(backend: Callable[[str, NarrativeInputs], NarrativeOutput],
-                         n_samples: int = 5,
-                         max_workers: int = 5) -> Callable[[str, NarrativeInputs], NarrativeOutput]:
-    """Majority vote over n_samples independent calls to a single backend
-    (self-consistency sampling). The backend must sample at temperature > 0
-    to produce distinct votes, e.g.:
-
-        self_consistency_llm(functools.partial(call_claude, temperature=0.7),
-                            n_samples=5)
-
-    A thin, named convenience wrapper over make_majority_vote_llm for the
-    single-model / multiple-calls case, as distinct from ensembling across
-    different model families with make_majority_vote_llm([...]) directly.
-    """
-    return make_majority_vote_llm([backend], n_samples=n_samples, max_workers=max_workers)
 
 
 def with_backoff(llm_fn: Callable, retries: int = 3, base_delay: float = 1.0):

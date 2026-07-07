@@ -369,3 +369,68 @@ All three write CSVs to `caml_op_outputs/` (`narrative_subgroup_pass_rate`,
 `narrative_verifier_stress_test`, `narrative_ablation`) and are structured
 so re-running with `call_claude` in place of the mock is the only change
 needed to turn each from "mechanism validated" into "empirical result."
+
+## 8. Tried and removed: majority-vote ensembling
+
+A majority-vote mechanism was built on request (`make_majority_vote_llm`,
+`self_consistency_llm`, `call_openrouter`) — plurality vote on `sign`,
+strict-majority on `cited_features`, median on `cited_values`, combinable
+across either multiple model backends (cross-model ensembling) or repeated
+calls to one backend (self-consistency, Wang et al. 2022) — then removed
+after a head-to-head comparison against the existing retry loop showed it
+was dominated on both pass-rate and cost in every configuration tested.
+
+**The comparison** (n=1000 trials per configuration, identical 30%
+injected error rate, same synthetic patient, correct call-count
+accounting — a shared counter inside each stochastic mock instance so
+every underlying call is counted regardless of how many layers of
+retry/vote wrap it):
+
+| config | pass rate | mean LLM calls |
+|---|---|---|
+| single call, no retry/vote | 0.690 | 1.00 |
+| retry_x1 | 0.913 | 1.31 |
+| **retry_x2** | **0.976** | **1.40** |
+| vote_n3 (self-consistency, same model) | 0.918 | 3.00 |
+| vote_n5 (self-consistency, same model) | 0.979 | 5.00 |
+| vote_3backends (independent error streams) | 0.912 | 3.00 |
+| **The scenario majority vote was hypothesized to uniquely win — one backend with a systematic, repeated bias:** | | |
+| vote_3backends (2 clean backends + 1 systematically-biased) | 0.973 | 3.00 |
+| retry_x2 (retrying the *same* systematically-biased backend) | 0.969 | 1.41 |
+| **retry_x4 (cost-matched retry of the biased backend)** | **1.000** | **1.45** |
+
+**Retry dominates on both axes, including the scenario built specifically
+to favor voting.** `retry_x2` matches `vote_n5`'s pass rate (0.976 vs
+0.979) at 28% of the cost. Against a single backend with a systematic,
+repeated bias — the case cross-model voting was argued to uniquely
+help with, since a shared bias across an ensemble wouldn't be voted out
+the way random noise is — retrying that *same* biased backend still
+reaches 1.000 pass rate at 1.45 calls, beating 3-backend voting's 0.973
+at 3.0 calls on both count and cost.
+
+**Why:** the mechanisms aren't actually comparable at face value. Retry
+has an adaptive stopping rule — it stops the instant one attempt passes
+every verifier — so its average cost stays near 1.4 calls even at
+`max_retries=2`. Majority vote always pays its full fixed N regardless of
+whether the first sample alone would have passed. For structured,
+checkable output like this narrative, where a failing attempt gets
+*specific, targeted* feedback about exactly which claim was wrong (not
+just "try again"), adaptive retry is strictly more sample-efficient than
+combining several unexplained guesses. The theoretical case for majority
+vote (catching a bias shared by every retry of one model) turned out not
+to survive contact with the data, because retrying with pointed feedback
+about the specific violation is apparently enough to break a mock's
+"systematic" bias too — that finding may not generalize to a real LLM
+with a genuine training-induced bias immune to being told what's wrong,
+which is the one open question left if this is ever revisited.
+
+**What this means for "how does an agent help this research":** the
+value here wasn't building the mechanism — it was being willing to
+measure it against the alternative already in place and remove it when
+the data didn't support keeping it, rather than leaving speculative
+complexity in the pipeline because it was pluggable and tested-in-isolation
+(the earlier validation only showed majority vote *could* outvote a
+hallucination, never that it was *better than the alternative* at doing
+so). That distinction — "works" vs. "works better than what's already
+there" — is exactly the standard a thesis result needs to meet and a
+unit test alone doesn't enforce.

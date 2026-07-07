@@ -73,35 +73,6 @@ has once you want to extend it rather than just run it:
     a bare False: exhausting max_retries without passing every verifier
     means "route to a human reviewer," not "silently mark pass_overall
     False in a CSV row."
-
-TRIED AND REMOVED: majority-vote ensembling
----------------------------------------------------------------------------
-A majority-vote mechanism (make_majority_vote_llm / self_consistency_llm /
-call_openrouter) was built and then removed after a head-to-head comparison
-against the retry loop above, under an identical injected 30% error rate
-(n=1000 trials per configuration; see AGENT_INTEGRATION.md for the full
-table). Retry dominated on both pass-rate and cost in every configuration
-tested, including the one scenario majority vote was hypothesized to
-uniquely help with (a single backend with a systematic, repeated bias):
-
-    retry_x2                                    0.976 pass-rate, 1.40 calls/patient
-    vote_n5 (self-consistency, same model)      0.979 pass-rate, 5.00 calls/patient
-    retry_x4 (retrying a SYSTEMATICALLY-biased backend)  1.000 pass-rate, 1.45 calls/patient
-    vote_3backends (2 clean + 1 systematically-biased)   0.973 pass-rate, 3.00 calls/patient
-
-The reason is structural: retry has an adaptive stopping rule (stop the
-moment one attempt passes all verifiers), so its average cost stays near
-1.4 calls even at max_retries=2; majority vote always pays its full fixed
-N regardless of whether the first sample alone would have passed. For
-structured, checkable output like this narrative -- where a failing
-attempt gets *specific* feedback about exactly which claim was wrong,
-rather than being an unexplained wrong answer -- adaptive retry is
-strictly more sample-efficient than blind voting. Cross-model majority
-voting could still matter for failure modes retry structurally can't fix
-(e.g. every model in the ensemble sharing a training-data-driven bias that
-targeted feedback doesn't correct), but that's a different, unverified
-claim from the one tested here, and isn't reason enough to carry the
-mechanism's cost and complexity in the default pipeline on spec.
 """
 from __future__ import annotations
 

@@ -73,8 +73,10 @@ has once you want to extend it rather than just run it:
     a bare False: exhausting max_retries without passing every verifier
     means "route to a human reviewer," not "silently mark pass_overall
     False in a CSV row."
-  - make_majority_vote_llm() combines multiple independent backends (e.g.
-    call_claude + call_openrouter against different model families) via
+  - make_majority_vote_llm() combines multiple independent generations
+    (either multiple backends, e.g. call_claude + call_openrouter against
+    different model families, or n_samples > 1 repeated calls to a single
+    backend -- self-consistency, see self_consistency_llm() -- or both) via
     plurality vote on sign / strict-majority on cited_features / median on
     cited_values, and drops in as just another llm_fn -- no change to the
     retry loop or checks needed. This mirrors CaML-OP's own causal-side
@@ -421,46 +423,70 @@ def _majority_values(outputs: list) -> list:
            for q, vals in by_quantity.items() if len(vals) > threshold]
 
 
-def make_majority_vote_llm(backends: list) -> Callable[[str, NarrativeInputs], NarrativeOutput]:
-    """Combine N independent backends (e.g. [call_claude, call_openrouter
-    with a Llama model, call_openrouter with a Gemini model]) via majority
-    vote into a single NarrativeOutput that drops into generate_and_check /
-    run_eval completely unchanged -- majority voting is just another
-    llm_fn, reusing the exact same retry loop and verifiers. On a retry,
-    every backend regenerates against the same feedback and the vote is
-    retaken, with no special-casing needed in generate_and_check.
+def make_majority_vote_llm(backends: list, n_samples: int = 1,
+                          max_workers: int = 1) -> Callable[[str, NarrativeInputs], NarrativeOutput]:
+    """Combine independent generations into a single NarrativeOutput via
+    majority vote. Drops in as just another llm_fn -- generate_and_check /
+    run_eval need no changes, and on a retry every call regenerates against
+    the same feedback and the vote is retaken automatically.
 
-    Combination rule, applied independently per field:
-      - sign: plurality vote; a tie is broken toward "indeterminate" (see
-        _majority_sign) rather than an arbitrary winner.
-      - cited_features: kept only if cited by a STRICT MAJORITY of
-        backends -- one outlier model's hallucinated feature is outvoted
-        rather than silently propagated into the final narrative.
-      - cited_values: median across backends that cited a given quantity
-        tag, again requiring a strict majority to include the tag at all.
-      - narrative (prose): taken from whichever backend's own sign matches
-        the consensus sign. Synthesizing prose across models is out of
+    Two ways to get multiple votes, and they compose:
+      - Multiple backends (cross-model ensembling): backends=[call_claude,
+        call_openrouter], n_samples=1 -- one call to each of N different
+        models. One model's systematic bias or hallucination pattern is
+        outvoted by the others.
+      - n_samples > 1 (self-consistency, Wang et al. 2022): backends=[llm],
+        n_samples=5 -- five independent calls to the SAME backend. This
+        only produces distinct votes if the backend samples at
+        temperature > 0 -- e.g.
+        functools.partial(call_claude, temperature=0.7). The default
+        call_claude uses temperature=0.0 (for reproducibility elsewhere in
+        this pipeline) and would vote trivially with itself n_samples
+        times at temperature=0; see self_consistency_llm() below for the
+        common case of one backend, several samples.
+      - Both together: len(backends) * n_samples total independent votes,
+        e.g. 3 samples each from 2 different models = 6 votes.
+
+    Combination rule, applied independently per field across however many
+    votes were collected:
+      - sign: plurality vote; ANY tie (including a straight
+        positive-vs-negative split -- the case that matters most) resolves
+        to "indeterminate" rather than an arbitrary winner (see
+        _majority_sign).
+      - cited_features: kept only if cited by a STRICT MAJORITY of votes --
+        one outlier's hallucinated feature is outvoted rather than silently
+        propagated into the final narrative.
+      - cited_values: median across votes that cited a given quantity tag,
+        again requiring a strict majority to include the tag at all.
+      - narrative (prose): taken from whichever vote's own sign matches the
+        consensus sign. Synthesizing prose across N generations is out of
         scope here -- the checks verify the structured fields, not the
         prose, so this is a reasonable simplification, not a gap in what's
         actually being verified.
 
-    This is diversity ensembling, not resampling: querying one model N
-    times at temperature=0 returns N identical outputs and votes trivially.
-    The intended use is backends from *different* model families, so one
-    model's systematic bias or hallucination pattern is outvoted by the
-    others rather than being the only opinion available -- the same
-    rationale CaML-OP's own R+DR ensemble uses on the causal-estimation
-    side (thesis: "Ensemble and uncertainty reporting").
+    max_workers > 1 runs the backends*n_samples calls concurrently via a
+    thread pool -- each is an independent network request, so this cuts
+    wall-clock latency roughly proportionally. Defaults to 1 (sequential)
+    for deterministic test behavior; set higher for a live run (e.g.
+    max_workers=n_samples).
 
     Caveat: caching in run_eval() memoizes the *combined* output keyed on
-    the shared prompt, not each backend's individual call, so an
-    interrupted majority-vote run doesn't get partial-backend cache reuse.
+    the shared prompt, not each individual call, so an interrupted
+    majority-vote run doesn't get partial-vote cache reuse.
     """
-    if len(backends) < 2:
-        raise ValueError("majority vote needs at least 2 backends")
+    total_votes = len(backends) * n_samples
+    if total_votes < 2:
+        raise ValueError(f"majority vote needs at least 2 total calls, got "
+                        f"{len(backends)} backend(s) x {n_samples} sample(s) = {total_votes}")
+    calls = [backend for backend in backends for _ in range(n_samples)]
 
     def vote(prompt: str, inputs: NarrativeInputs) -> NarrativeOutput:
-        outputs = [backend(prompt, inputs) for backend in backends]
+        if max_workers <= 1:
+            outputs = [backend(prompt, inputs) for backend in calls]
+        else:
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                futures = [pool.submit(backend, prompt, inputs) for backend in calls]
+                outputs = [f.result() for f in futures]
         sign = _majority_sign(outputs)
         features = _majority_features(outputs)
         values = _majority_values(outputs)
@@ -469,6 +495,23 @@ def make_majority_vote_llm(backends: list) -> Callable[[str, NarrativeInputs], N
                                cited_features=features, cited_values=values)
 
     return vote
+
+
+def self_consistency_llm(backend: Callable[[str, NarrativeInputs], NarrativeOutput],
+                         n_samples: int = 5,
+                         max_workers: int = 5) -> Callable[[str, NarrativeInputs], NarrativeOutput]:
+    """Majority vote over n_samples independent calls to a single backend
+    (self-consistency sampling). The backend must sample at temperature > 0
+    to produce distinct votes, e.g.:
+
+        self_consistency_llm(functools.partial(call_claude, temperature=0.7),
+                            n_samples=5)
+
+    A thin, named convenience wrapper over make_majority_vote_llm for the
+    single-model / multiple-calls case, as distinct from ensembling across
+    different model families with make_majority_vote_llm([...]) directly.
+    """
+    return make_majority_vote_llm([backend], n_samples=n_samples, max_workers=max_workers)
 
 
 def with_backoff(llm_fn: Callable, retries: int = 3, base_delay: float = 1.0):

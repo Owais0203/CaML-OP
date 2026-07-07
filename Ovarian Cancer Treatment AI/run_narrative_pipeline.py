@@ -31,7 +31,7 @@ from sklearn.model_selection import train_test_split
 from code import load_tcga, generate_dgp
 from effect_shap import CaMLOPEffectModel, compute_effect_shap, top_features, FEATURE_NAMES
 from calibrated_abstention import fit_calibration_factor, should_abstain
-from llm_narrative_agent import NarrativeInputs, run_eval, mock_llm, call_claude
+from llm_narrative_agent import NarrativeInputs, run_eval, mock_llm, call_claude, self_consistency_llm
 
 OUT_DIR = "caml_op_outputs"
 
@@ -106,14 +106,22 @@ def prepare_patient_rows(n_patients: int = 30, seed: int = 42, verbose: bool = T
     return patient_rows, X_sample, sample_idx, calib_factor
 
 
-def main(n_patients: int = 30, seed: int = 42, live: bool = False):
+def main(n_patients: int = 30, seed: int = 42, live: bool = False, vote_samples: int = 1):
     os.makedirs(OUT_DIR, exist_ok=True)
     patient_rows, X_sample, sample_idx, calib_factor = prepare_patient_rows(n_patients, seed)
     must_abstain = np.array([inp.must_abstain for inp in patient_rows])
 
-    llm_fn = call_claude if live else mock_llm
-    model_name = "claude-sonnet-5" if live else "mock"
-    backend = "Claude (live API)" if live else "mock template (no API key required)"
+    if not live:
+        llm_fn, model_name, backend = mock_llm, "mock", "mock template (no API key required)"
+    elif vote_samples > 1:
+        import functools
+        sampling_claude = functools.partial(call_claude, temperature=0.7)
+        llm_fn = self_consistency_llm(sampling_claude, n_samples=vote_samples,
+                                      max_workers=vote_samples)
+        model_name = f"claude-sonnet-5-vote{vote_samples}"
+        backend = f"Claude, self-consistency majority vote over {vote_samples} samples"
+    else:
+        llm_fn, model_name, backend = call_claude, "claude-sonnet-5", "Claude (live API)"
     print(f"Generating narratives + running faithfulness checks via {backend}...")
     results = run_eval(
         patient_rows, llm_fn=llm_fn, model_name=model_name,
@@ -148,5 +156,10 @@ if __name__ == "__main__":
     parser.add_argument("--live", action="store_true",
                         help="Use a real Claude call instead of the mock LLM "
                              "(requires the anthropic package and ANTHROPIC_API_KEY).")
+    parser.add_argument("--vote-samples", type=int, default=1,
+                        help="With --live, take a self-consistency majority vote "
+                             "over this many independent Claude calls per patient "
+                             "(temperature=0.7) instead of a single call. 1 = disabled.")
     args = parser.parse_args()
-    main(n_patients=args.n_patients, seed=args.seed, live=args.live)
+    main(n_patients=args.n_patients, seed=args.seed, live=args.live,
+        vote_samples=args.vote_samples)

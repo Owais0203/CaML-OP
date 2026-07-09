@@ -80,11 +80,21 @@ class CaMLOPEffectModel:
         return self
 
     def predict(self, X_raw: np.ndarray) -> np.ndarray:
+        tau_r, tau_dr = self.predict_components(X_raw)
+        return 0.5 * tau_r + 0.5 * tau_dr
+
+    def predict_components(self, X_raw: np.ndarray):
+        """The R-Learner and DR-Learner point estimates separately, before
+        ensembling. R is robust to outcome-model misspecification, DR to
+        propensity-model misspecification (thesis: "R-Learner"/"DR-Learner"
+        sections) -- their disagreement is a structural/model-form
+        uncertainty signal distinct from either component's own sampling
+        uncertainty (see NarrativeInputs.model_disagreement)."""
         X_raw = np.atleast_2d(X_raw)
         X_a = self.enc.transform(X_raw)
-        tau_r = self.r_model.effect(X_a)
-        tau_dr = self.dr_model.effect(X_a)
-        return 0.5 * np.asarray(tau_r) + 0.5 * np.asarray(tau_dr)
+        tau_r = np.asarray(self.r_model.effect(X_a))
+        tau_dr = np.asarray(self.dr_model.effect(X_a))
+        return tau_r, tau_dr
 
     def predict_interval(self, X_raw: np.ndarray, alpha: float = 0.05):
         """Approximate uncertainty interval, mirroring code.py's

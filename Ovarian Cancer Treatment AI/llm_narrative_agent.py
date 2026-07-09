@@ -58,6 +58,49 @@ None of these were faithfulness failures -- they were prose-parsing
 failures. Structured output (the model declares sign/features/values as
 typed fields via a tool call, instead of us inferring them from text)
 removes the entire class: there is no text to misparse.
+
+ARCHITECTURE UPDATE (composable verifiers, escalation)
+---------------------------------------------------------------------------
+Two further changes, aimed at the gaps a single generate->check function
+has once you want to extend it rather than just run it:
+
+  - Verifiers are now a list (default_verifiers()), not three hardcoded
+    checks wired into the loop. A new check (e.g. the counterfactual-
+    consistency check designed but not built in AGENT_INTEGRATION.md
+    Section 6) is registered by appending a Verifier, not by editing
+    generate_and_check or _feedback_for.
+  - NarrativeStatus.ESCALATED is a first-class result state distinct from
+    a bare False: exhausting max_retries without passing every verifier
+    means "route to a human reviewer," not "silently mark pass_overall
+    False in a CSV row."
+
+CAUSAL-STRUCTURE VERIFIERS (counterfactual consistency, uncertainty synthesis)
+---------------------------------------------------------------------------
+Every check up to this point verifies a claim against a single number
+(sign vs tau_hat, a cited value vs its tag). Two further checks use the
+causal structure CaML-OP already computes but the narrative never
+consulted:
+
+  - check_counterfactual_consistency requires the model to cite BOTH
+    arm-level outcome estimates (mu0 = E[Y|X,T=0], mu1 = E[Y|X,T=1], from
+    code.py's fit_outcome_models, added for the AIPW fix) and checks the
+    cited pair is ordered consistently with the declared sign. This is the
+    potential-outcomes framework itself as a verification structure: a
+    "benefit" claim implies mu1 > mu0, not just that their difference is a
+    positive number the model happened to report -- a class of internal
+    contradiction a single-number check cannot see.
+  - check_dominant_uncertainty requires the model to name which of three
+    structurally distinct uncertainty sources dominates for THIS patient:
+    sampling noise (CI width), model-form disagreement (how much the
+    R-Learner and DR-Learner -- robust to different misspecifications --
+    disagree before being ensembled), or identification fragility (an
+    E-value: how weak an unmeasured confounder would need to be to explain
+    the finding away, see sensitivity_analysis.py). This is a synthesis
+    task across several continuous signals that a fixed template can't
+    scale to gracefully (it would need a combinatorial rule for every
+    pattern of which signal is largest), but an LLM can -- and it's still
+    checked against a deterministic ranking, not left to the model's
+    judgment about which one to report.
 """
 from __future__ import annotations
 
@@ -68,9 +111,12 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, asdict
+from enum import Enum
 from typing import Callable, Optional
 
 import pandas as pd
+
+from sensitivity_analysis import e_value as _e_value, FRAGILE_E_VALUE_THRESHOLD
 
 
 # ---------------------------------------------------------------------------
@@ -83,6 +129,10 @@ class NarrativeInputs:
     tau_hat: float
     ci_lo: float
     ci_hi: float
+    mu0: float   # E[Y|X,T=0] -- expected outcome estimate under no treatment (fit_outcome_models)
+    mu1: float   # E[Y|X,T=1] -- expected outcome estimate under treatment (fit_outcome_models)
+    tau_r: float   # R-Learner component point estimate, pre-ensemble (CaMLOPEffectModel.predict_components)
+    tau_dr: float  # DR-Learner component point estimate, pre-ensemble
     top_positive: list = field(default_factory=list)  # [(feature, phi), ...], phi > 0
     top_negative: list = field(default_factory=list)  # [(feature, phi), ...], phi < 0
     # Set by calibrated_abstention.should_abstain() against a *calibrated*
@@ -98,7 +148,8 @@ class NarrativeInputs:
     def quantities(self) -> dict:
         """Every quantity the model is allowed to cite a number against,
         keyed by the tag it must use in cited_values."""
-        q = {"tau_hat": self.tau_hat, "ci_lo": self.ci_lo, "ci_hi": self.ci_hi}
+        q = {"tau_hat": self.tau_hat, "ci_lo": self.ci_lo, "ci_hi": self.ci_hi,
+             "mu0": self.mu0, "mu1": self.mu1}
         q.update({f"shap:{f}": v for f, v in self.top_positive + self.top_negative})
         return q
 
@@ -113,9 +164,10 @@ class CitedValue:
 class NarrativeOutput:
     """The model's structured submission for one patient."""
     narrative: str
-    sign: str                       # "positive" | "negative"
+    sign: str                       # "positive" | "negative" | "indeterminate"
     cited_features: list            # list[str]
-    cited_values: list              # list[CitedValue]
+    cited_values: list              # list[CitedValue] -- includes mu0/mu1, see check_counterfactual_consistency
+    dominant_uncertainty_source: str  # "sampling" | "model_disagreement" | "identification"
 
 
 # ---------------------------------------------------------------------------
@@ -134,17 +186,36 @@ Rules (must follow exactly):
   drivers listed below. Do not invent or include features not listed.
 - "cited_values" must tag every number you state in the narrative with
   which quantity it represents, using exactly one of these tags: tau_hat,
-  ci_lo, ci_hi, or shap:<feature> for a listed driver. Do not cite a number
-  under the wrong tag.
+  ci_lo, ci_hi, mu0, mu1, or shap:<feature> for a listed driver. Do not
+  cite a number under the wrong tag. You must cite both mu0 and mu1: mu0
+  is the model's expected outcome estimate if this patient is NOT treated,
+  mu1 is the expected outcome estimate if they ARE treated. If "sign" is
+  "positive" (benefit), mu1 must exceed mu0; if "negative" (harm), mu0
+  must exceed mu1 -- state both values and make sure the narrative's
+  claim is consistent with which one is larger.
+- "dominant_uncertainty_source" must name whichever of the three
+  uncertainty signals below is largest for this patient specifically (not
+  a generic answer): "sampling" (the interval width reflects ordinary
+  sampling noise), "model_disagreement" (the R-Learner and DR-Learner
+  component estimates disagree substantially, meaning the estimate is
+  sensitive to which nuisance model you trust), or "identification" (the
+  E-value is low, meaning a plausible unmeasured confounder could explain
+  the finding away). Mention this dominant source in the narrative in
+  plain language.
 - The "narrative" field itself must be two to three sentences, must state
   the sign/magnitude of the effect and its uncertainty interval in plain
-  language, must name the cited features, and must not introduce outside
-  medical knowledge or claims not derivable from the numbers given.
+  language, must name the cited features, must mention the dominant
+  uncertainty source, and must not introduce outside medical knowledge or
+  claims not derivable from the numbers given.
 {abstain_narrative_rule}
 
 Patient covariates: {covariates}
 Estimated ITE (tau_hat): {tau_hat:.3f}
 95% uncertainty interval: [{ci_lo:.3f}, {ci_hi:.3f}]
+Expected outcome if untreated (mu0): {mu0:.3f}
+Expected outcome if treated (mu1): {mu1:.3f}
+R-Learner component estimate (tau_r): {tau_r:.3f}
+DR-Learner component estimate (tau_dr): {tau_dr:.3f}
 Top features increasing benefit: {top_positive}
 Top features decreasing benefit: {top_negative}
 """
@@ -176,6 +247,10 @@ def build_prompt(inputs: NarrativeInputs, feedback: Optional[str] = None,
         tau_hat=inputs.tau_hat,
         ci_lo=inputs.ci_lo,
         ci_hi=inputs.ci_hi,
+        mu0=inputs.mu0,
+        mu1=inputs.mu1,
+        tau_r=inputs.tau_r,
+        tau_dr=inputs.tau_dr,
         top_positive=", ".join(f"{f} ({v:+.3f})" for f, v in inputs.top_positive) or "none",
         top_negative=", ".join(f"{f} ({v:+.3f})" for f, v in inputs.top_negative) or "none",
         abstain_rule=ABSTAIN_RULE if inputs.must_abstain else NO_ABSTAIN_RULE,
@@ -213,10 +288,43 @@ NARRATIVE_TOOL = {
                     "required": ["quantity", "value"],
                 },
             },
+            "dominant_uncertainty_source": {
+                "type": "string",
+                "enum": ["sampling", "model_disagreement", "identification"],
+            },
         },
-        "required": ["narrative", "sign", "cited_features", "cited_values"],
+        "required": ["narrative", "sign", "cited_features", "cited_values",
+                    "dominant_uncertainty_source"],
     },
 }
+
+
+# ---------------------------------------------------------------------------
+# Causal-structure uncertainty synthesis -- shared by mock_llm (so the
+# mock's self-consistent-by-construction output picks the same answer the
+# verifier would) and check_dominant_uncertainty (the actual gate).
+# ---------------------------------------------------------------------------
+# Both thresholds are provisional, documented conventions -- not empirically
+# calibrated to this clinical context -- for putting the three signals on a
+# comparable "high vs not" scale. A score above 1.0 means that signal is
+# "high" by its own threshold; the dominant source is whichever is largest,
+# even if none happen to individually clear 1.0.
+STAT_UNCERTAINTY_HIGH_WIDTH = 0.3   # a reported CI width, in outcome-probability units
+MODEL_DISAGREEMENT_HIGH = 0.05      # |tau_r - tau_dr|, in outcome-probability units
+
+
+def _uncertainty_scores(inputs: NarrativeInputs) -> dict:
+    stat_score = (inputs.ci_hi - inputs.ci_lo) / STAT_UNCERTAINTY_HIGH_WIDTH
+    model_score = abs(inputs.tau_r - inputs.tau_dr) / MODEL_DISAGREEMENT_HIGH
+    ev = _e_value(inputs.mu0, inputs.mu1)
+    ident_score = FRAGILE_E_VALUE_THRESHOLD / max(ev, 1e-6)
+    return {"sampling": stat_score, "model_disagreement": model_score,
+           "identification": ident_score}
+
+
+def _dominant_uncertainty_source(inputs: NarrativeInputs) -> str:
+    scores = _uncertainty_scores(inputs)
+    return max(scores, key=scores.get)
 
 
 # ---------------------------------------------------------------------------
@@ -230,14 +338,21 @@ def mock_llm(prompt: str, inputs: NarrativeInputs) -> NarrativeOutput:
     feats = (inputs.top_positive[:1] + inputs.top_negative[:1])
     feat_names = [f for f, _ in feats]
     feat_txt = " and ".join(feat_names) if feat_names else "the modelled covariates"
+    dominant = _dominant_uncertainty_source(inputs)
+    dominant_txt = {
+        "sampling": "ordinary sampling noise in the estimate",
+        "model_disagreement": "disagreement between the R-Learner and DR-Learner components",
+        "identification": "sensitivity to potential unmeasured confounding",
+    }[dominant]
     if inputs.must_abstain:
         sign = "indeterminate"
         narrative = (
             f"This patient's estimated treatment effect is {inputs.tau_hat:+.3f} "
             f"(95% interval {inputs.ci_lo:.3f} to {inputs.ci_hi:.3f}), but at a "
             f"calibrated confidence level this is not reliably distinguishable "
-            f"from no effect. The estimate is most influenced by {feat_txt}, and "
-            f"no directional benefit or harm claim can be made for this patient."
+            f"from no effect, driven mainly by {dominant_txt}. The estimate is "
+            f"most influenced by {feat_txt}, and no directional benefit or harm "
+            f"claim can be made for this patient."
         )
     else:
         sign = "positive" if inputs.tau_hat > 0 else "negative"
@@ -245,17 +360,21 @@ def mock_llm(prompt: str, inputs: NarrativeInputs) -> NarrativeOutput:
         narrative = (
             f"This patient's estimated treatment effect is {inputs.tau_hat:+.3f} "
             f"(95% interval {inputs.ci_lo:.3f} to {inputs.ci_hi:.3f}), indicating "
-            f"{direction} five-year survival benefit from platinum therapy. "
-            f"The estimate is driven mainly by {feat_txt}, and the interval width "
-            f"reflects meaningful uncertainty in this individualized estimate."
+            f"{direction} five-year survival benefit from platinum therapy "
+            f"(expected outcome {inputs.mu1:.3f} if treated vs {inputs.mu0:.3f} if "
+            f"not). The estimate is driven mainly by {feat_txt}, and the leading "
+            f"source of uncertainty here is {dominant_txt}."
         )
     cited_values = [
         CitedValue("tau_hat", inputs.tau_hat),
         CitedValue("ci_lo", inputs.ci_lo),
         CitedValue("ci_hi", inputs.ci_hi),
+        CitedValue("mu0", inputs.mu0),
+        CitedValue("mu1", inputs.mu1),
     ]
     return NarrativeOutput(narrative=narrative, sign=sign,
-                           cited_features=feat_names, cited_values=cited_values)
+                           cited_features=feat_names, cited_values=cited_values,
+                           dominant_uncertainty_source=dominant)
 
 
 def make_flaky_mock(fail_first_n: int = 1):
@@ -272,7 +391,8 @@ def make_flaky_mock(fail_first_n: int = 1):
             bad_sign = "negative" if good.sign == "positive" else "positive"
             return NarrativeOutput(narrative=good.narrative, sign=bad_sign,
                                    cited_features=good.cited_features,
-                                   cited_values=good.cited_values)
+                                   cited_values=good.cited_values,
+                                   dominant_uncertainty_source=good.dominant_uncertainty_source)
         return mock_llm(prompt, inputs)
 
     return flaky
@@ -306,6 +426,7 @@ def call_claude(prompt: str, inputs: NarrativeInputs,
                 sign=data["sign"],
                 cited_features=list(data.get("cited_features", [])),
                 cited_values=[CitedValue(**cv) for cv in data.get("cited_values", [])],
+                dominant_uncertainty_source=data["dominant_uncertainty_source"],
             )
     raise RuntimeError("Model did not call submit_clinical_narrative")
 
@@ -376,68 +497,171 @@ def check_numeric(output: NarrativeOutput, inputs: NarrativeInputs,
     return True
 
 
+def check_counterfactual_consistency(output: NarrativeOutput, inputs: NarrativeInputs) -> bool:
+    """The potential-outcomes framework underlying CaML-OP means a
+    directional ITE claim implies a specific ordering of the two arm-level
+    outcome estimates: "this patient benefits" (sign=positive) should mean
+    the treated-arm outcome estimate (mu1) exceeds the untreated-arm one
+    (mu0), not just that their difference happens to be reported as a
+    positive number. Requires both to be cited (check_numeric separately
+    verifies each is numerically accurate; this checks they're used
+    consistently with the claim) -- a class of internal contradiction a
+    single-number check cannot see."""
+    cited = {cv.quantity: cv.value for cv in output.cited_values}
+    if "mu0" not in cited or "mu1" not in cited:
+        return False
+    if inputs.must_abstain or output.sign == "indeterminate":
+        return True  # no directional claim is being made to be consistent with
+    if output.sign == "positive":
+        return cited["mu1"] > cited["mu0"]
+    if output.sign == "negative":
+        return cited["mu1"] < cited["mu0"]
+    return True
+
+
+def check_dominant_uncertainty(output: NarrativeOutput, inputs: NarrativeInputs) -> bool:
+    """CaML-OP has three structurally distinct sources of uncertainty
+    about an estimate -- sampling noise (CI width), model-form
+    disagreement (R-Learner vs DR-Learner, robust to different
+    misspecifications), and identification fragility (E-value: how weak
+    an unmeasured confounder would need to be to explain the finding
+    away). Requires the model to name whichever is largest for THIS
+    patient, checked against the same deterministic ranking mock_llm uses
+    (_dominant_uncertainty_source) -- a synthesis task across several
+    continuous signals, not a lookup a fixed template could do as
+    gracefully across every combination of which signal is largest."""
+    return output.dominant_uncertainty_source == _dominant_uncertainty_source(inputs)
+
+
+class NarrativeStatus(str, Enum):
+    PASSED = "passed"          # all verifiers passed within max_retries attempts
+    ESCALATED = "escalated"    # exhausted retries without passing every verifier;
+                              # requires human review, must not be auto-displayed
+
+
+@dataclass
+class Verifier:
+    """A single named check, decoupled from generate_and_check's loop so a
+    new check (e.g. the counterfactual-consistency check designed but not
+    built in AGENT_INTEGRATION.md Section 6) is registered by appending to
+    default_verifiers(), not by editing the loop or a hardcoded tuple."""
+    name: str
+    check: Callable[[NarrativeOutput, NarrativeInputs], bool]
+    feedback: Callable[[NarrativeInputs], str]
+
+
+def _sign_feedback(inputs: NarrativeInputs) -> str:
+    if inputs.must_abstain:
+        return ("sign must be 'indeterminate': the calibrated interval for this "
+               "patient spans zero, so no directional claim is statistically "
+               "supportable regardless of tau_hat's raw sign.")
+    expected = "positive" if inputs.tau_hat > 0 else "negative"
+    return f"sign must be '{expected}' (tau_hat={inputs.tau_hat:+.3f})."
+
+
+def _features_feedback(inputs: NarrativeInputs) -> str:
+    return f"cited_features must be drawn only from {sorted(inputs.true_drivers())}."
+
+
+def _numeric_feedback(inputs: NarrativeInputs) -> str:
+    return (f"one or more cited_values did not match its declared quantity "
+           f"within tolerance; valid quantities are {sorted(inputs.quantities())}.")
+
+
+def _counterfactual_feedback(inputs: NarrativeInputs) -> str:
+    return ("cited_values must include both 'mu0' (expected outcome if untreated) "
+           "and 'mu1' (expected outcome if treated), and when sign is "
+           "positive/negative the cited mu1/mu0 pair must be ordered "
+           "consistently with that sign (mu1 > mu0 for positive, mu1 < mu0 "
+           "for negative).")
+
+
+def _dominant_uncertainty_feedback(inputs: NarrativeInputs) -> str:
+    true_source = _dominant_uncertainty_source(inputs)
+    return (f"dominant_uncertainty_source must be '{true_source}' for this "
+           f"patient -- name the largest of the three uncertainty signals "
+           f"(sampling / model_disagreement / identification) given in the "
+           f"prompt, not a generic or arbitrary one.")
+
+
+def default_verifiers(tol: float = 0.15, atol: float = 0.005) -> list:
+    """The checks the thesis specifies (sign, features, numeric) plus two
+    causal-structure checks (counterfactual consistency, dominant
+    uncertainty synthesis), as a composable list. Pass a longer list (e.g.
+    this list plus a new Verifier) to generate_and_check's `verifiers`
+    argument to extend the gate without touching the loop."""
+    return [
+        Verifier("sign", check_sign, _sign_feedback),
+        Verifier("features", check_features, _features_feedback),
+        Verifier("numeric", lambda output, inp: check_numeric(output, inp, tol=tol, atol=atol),
+                _numeric_feedback),
+        Verifier("counterfactual", check_counterfactual_consistency, _counterfactual_feedback),
+        Verifier("dominant_uncertainty", check_dominant_uncertainty, _dominant_uncertainty_feedback),
+    ]
+
+
 @dataclass
 class NarrativeResult:
     inputs: NarrativeInputs
     output: NarrativeOutput
-    pass_sign: bool
-    pass_features: bool
-    pass_numeric: bool
+    checks: dict                          # {"sign": bool, "features": bool, "numeric": bool, ...}
+    status: NarrativeStatus = NarrativeStatus.PASSED
     attempts: int = 1
 
     @property
     def passed(self) -> bool:
-        return self.pass_sign and self.pass_features and self.pass_numeric
+        return self.status == NarrativeStatus.PASSED
 
     @property
     def narrative(self) -> str:
         return self.output.narrative
 
+    # Backward-compatible accessors for the three original named checks --
+    # existing call sites (run_eval, narrative_research_eval.py, tests) read
+    # r.pass_sign / r.pass_features / r.pass_numeric directly.
+    @property
+    def pass_sign(self) -> bool:
+        return self.checks.get("sign", True)
 
-def _check(output: NarrativeOutput, inputs: NarrativeInputs,
-          tol: float, atol: float) -> tuple:
-    return (check_sign(output, inputs),
-            check_features(output, inputs),
-            check_numeric(output, inputs, tol=tol, atol=atol))
+    @property
+    def pass_features(self) -> bool:
+        return self.checks.get("features", True)
 
+    @property
+    def pass_numeric(self) -> bool:
+        return self.checks.get("numeric", True)
 
-def _feedback_for(pass_sign: bool, pass_features: bool, pass_numeric: bool,
-                  inputs: NarrativeInputs) -> str:
-    msgs = []
-    if not pass_sign:
-        if inputs.must_abstain:
-            msgs.append("sign must be 'indeterminate': the calibrated interval "
-                       "for this patient spans zero, so no directional claim "
-                       "is statistically supportable regardless of tau_hat's raw sign.")
-        else:
-            expected = "positive" if inputs.tau_hat > 0 else "negative"
-            msgs.append(f"sign must be '{expected}' (tau_hat={inputs.tau_hat:+.3f}).")
-    if not pass_features:
-        msgs.append(f"cited_features must be drawn only from {sorted(inputs.true_drivers())}.")
-    if not pass_numeric:
-        msgs.append(f"one or more cited_values did not match its declared quantity "
-                    f"within tolerance; valid quantities are {sorted(inputs.quantities())}.")
-    return " ".join(msgs)
+    @property
+    def pass_counterfactual(self) -> bool:
+        return self.checks.get("counterfactual", True)
+
+    @property
+    def pass_dominant_uncertainty(self) -> bool:
+        return self.checks.get("dominant_uncertainty", True)
 
 
 def generate_and_check(inputs: NarrativeInputs,
                        llm_fn: Callable[[str, NarrativeInputs], NarrativeOutput] = mock_llm,
                        tol: float = 0.15, atol: float = 0.005,
-                       max_retries: int = 2) -> NarrativeResult:
+                       max_retries: int = 2,
+                       verifiers: Optional[list] = None) -> NarrativeResult:
     """Generate -> check -> (on failure) feed back the specific failing
-    check(s) and regenerate, up to max_retries additional attempts."""
+    check(s) and regenerate, up to max_retries additional attempts. If every
+    attempt fails, the result is NarrativeStatus.ESCALATED rather than
+    silently reporting a False -- a distinct state a caller can route to a
+    human reviewer instead of a dashboard."""
+    verifiers = verifiers if verifiers is not None else default_verifiers(tol, atol)
     feedback, previous = None, None
+    checks, output = {}, None
     for attempt in range(1, max_retries + 2):  # first attempt + max_retries retries
         prompt = build_prompt(inputs, feedback=feedback, previous=previous)
         output = llm_fn(prompt, inputs)
-        pass_sign, pass_features, pass_numeric = _check(output, inputs, tol, atol)
-        if pass_sign and pass_features and pass_numeric:
-            return NarrativeResult(inputs, output, pass_sign, pass_features,
-                                   pass_numeric, attempts=attempt)
-        feedback = _feedback_for(pass_sign, pass_features, pass_numeric, inputs)
+        checks = {v.name: v.check(output, inputs) for v in verifiers}
+        if all(checks.values()):
+            return NarrativeResult(inputs, output, checks, NarrativeStatus.PASSED, attempts=attempt)
+        feedback = " ".join(v.feedback(inputs) for v in verifiers if not checks[v.name])
         previous = output
-    return NarrativeResult(inputs, output, pass_sign, pass_features,
-                           pass_numeric, attempts=attempt)
+    return NarrativeResult(inputs, output, checks, NarrativeStatus.ESCALATED, attempts=attempt)
 
 
 # ---------------------------------------------------------------------------
@@ -480,7 +704,8 @@ class _DiskCache:
 def run_eval(patient_rows: list, llm_fn: Callable = mock_llm,
             tol: float = 0.15, atol: float = 0.005, max_retries: int = 2,
             out_csv: Optional[str] = None, cache_path: Optional[str] = None,
-            model_name: str = "unknown", max_workers: int = 1) -> pd.DataFrame:
+            model_name: str = "unknown", max_workers: int = 1,
+            verifiers: Optional[list] = None) -> pd.DataFrame:
     """Batch faithfulness evaluation across patients, producing the
     empirical pass-rate the thesis (RQ2 / Limitations) flags as unreported.
 
@@ -513,21 +738,25 @@ def run_eval(patient_rows: list, llm_fn: Callable = mock_llm,
 
     def process(inp: NarrativeInputs) -> dict:
         r = generate_and_check(inp, llm_fn=cached_llm_fn, tol=tol, atol=atol,
-                               max_retries=max_retries)
-        return {
+                               max_retries=max_retries, verifiers=verifiers)
+        row = {
             "patient_id": inp.patient_id,
             "tau_hat": inp.tau_hat,
             "narrative": r.narrative,
             "sign": r.output.sign,
             "cited_features": ";".join(r.output.cited_features),
             "cited_values": json.dumps(asdict_cited(r.output.cited_values)),
-            "pass_sign": r.pass_sign,
-            "pass_features": r.pass_features,
-            "pass_numeric": r.pass_numeric,
-            "pass_overall": r.passed,
-            "attempts": r.attempts,
-            "prompt_version": PROMPT_VERSION,
         }
+        # One pass_<name> column per verifier actually run, so a caller that
+        # passes a longer `verifiers` list (a new check appended) gets a new
+        # column automatically rather than needing run_eval edited too.
+        for name, val in r.checks.items():
+            row[f"pass_{name}"] = val
+        row["pass_overall"] = r.passed
+        row["status"] = r.status.value  # "passed" or "escalated" -- see NarrativeStatus
+        row["attempts"] = r.attempts
+        row["prompt_version"] = PROMPT_VERSION
+        return row
 
     def append_row(row: dict):
         rows.append(row)

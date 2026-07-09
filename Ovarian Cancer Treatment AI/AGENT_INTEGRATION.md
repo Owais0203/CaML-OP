@@ -369,3 +369,87 @@ All three write CSVs to `caml_op_outputs/` (`narrative_subgroup_pass_rate`,
 `narrative_verifier_stress_test`, `narrative_ablation`) and are structured
 so re-running with `call_claude` in place of the mock is the only change
 needed to turn each from "mechanism validated" into "empirical result."
+
+## 8. Causal-structure verifiers, not generic LLM engineering
+
+Everything up to this point (structured output, retry, composable
+verifiers, escalation) is generic LLM-agent engineering that happens to
+sit on top of a causal model — none of it uses anything specific to
+*causal inference*. Four mechanisms were added to close that gap, ranked
+by how directly they reuse causal machinery already in the codebase
+versus needing new plumbing.
+
+**Counterfactual-contrastive consistency (`check_counterfactual_consistency`).**
+The agent previously verified a single scalar (`tau_hat`) against a single
+CI. `fit_outcome_models` (added for the AIPW fix in `code.py`) already
+estimates the two potential outcomes separately — `E[Y|X,T=0]` (`mu0`) and
+`E[Y|X,T=1]` (`mu1`). The agent is now required to cite both, and a new
+check verifies the cited pair is *ordered* consistently with the declared
+sign (a "benefit" claim requires `mu1 > mu0`, not just that their
+difference happens to be reported as positive). This is the
+potential-outcomes framework itself as a verification structure — it
+catches a class of internal contradiction a single-number check
+structurally cannot see, and it's also the one place an LLM does
+something more than translate a pre-computed fact: it has to state and
+keep two related but distinct causal claims consistent, not just echo one
+number correctly.
+
+**Uncertainty decomposition and synthesis (`check_dominant_uncertainty`).**
+CaML-OP's R-Learner and DR-Learner are robust to *different*
+misspecifications (R survives a wrong outcome model, DR survives a wrong
+propensity model — the explicit rationale for ensembling them in the
+thesis's "Ensemble and uncertainty reporting" section). Their disagreement
+(`|tau_r - tau_dr|`, now exposed via `CaMLOPEffectModel.predict_components`)
+is a second, causally distinct uncertainty signal from CI width: it
+measures sensitivity to *which* nuisance model you trust, not sampling
+noise. Combined with a third signal (identification fragility, next), the
+agent must now name which of three sources dominates for *this* patient
+and say so in the narrative, checked against a deterministic ranking
+(`_dominant_uncertainty_source`). This is the mechanism's most genuinely
+"agentic" piece: synthesizing across several continuous signals into one
+coherent, correctly-prioritized statement is a task a fixed template can't
+scale to gracefully (it would need a hand-authored rule for every
+combination of which signal is largest), but an LLM can — and it's still
+checked, not left to the model's judgment about which one to report.
+
+**Identification-confidence via E-value (`sensitivity_analysis.py`).**
+Every uncertainty mechanism up to this point (calibrated abstention, R/DR
+disagreement) answers "how much does sampling noise / model choice affect
+this estimate" — none asks "how robust is this estimate to the
+confounding the thesis itself says is likely present" (Section
+"Identification assumptions" is explicit that performance status,
+comorbidities and physician preference are unmeasured and plausibly
+confound treatment assignment). Added a per-patient E-value (VanderWeele &
+Ding, 2017) computed from `mu0`/`mu1`: the minimum strength an unmeasured
+confounder would need to fully explain away the finding. A low E-value
+feeds directly into the dominant-uncertainty synthesis above as the
+"identification" signal. Stated plainly, as elsewhere in this codebase
+when a threshold is a judgment call rather than a derived constant: the
+fragility cutoff (E-value < 2.0) is a documented, provisional convention,
+not empirically calibrated to how strong an unmeasured confounder like
+performance status plausibly is in this specific clinical context — a
+domain reviewer should revisit it, not treat it as settled.
+
+**Subgroup-conditional calibration (`fit_calibration_factors_by_subgroup`).**
+The one purely statistical addition, with no LLM role at all — calling it
+an "agent improvement" would be inaccurate. `calibrated_abstention.py`
+previously fit one global calibration factor for the whole cohort, even
+though the subgroup PEHE table already shows reliability isn't uniform
+across age/stage/race. Now fits a factor per subgroup (falling back to the
+global factor below `min_n=20`, the same guard used elsewhere in this
+pipeline) and a patient gets the most conservative factor across every
+subgroup they belong to. Validated against the real pipeline: factors
+ranged 1.41x–1.83x across subgroups (vs. a single global 1.59x), a
+real, not noise-level, spread — `stageHigh` patients need meaningfully
+less inflation than `stageLow` patients to hit honest 95% coverage. This
+changes only the precomputed `must_abstain` flag the agent already
+consumes; nothing about the agent's own behavior changes.
+
+All four are verified: the two new checks pass a dedicated adversarial
+stress test (contradicted arm ordering, missing arm citation, and a wrong
+declared dominant source are all correctly caught — see the three new
+cases in `narrative_research_eval.py`'s stress suite, 15/15 correct
+overall), and `run_narrative_pipeline.py` runs end-to-end against the real
+TCGA-OV data with all four wired in, producing narratives that visibly
+differ in their stated dominant uncertainty source from patient to
+patient rather than a fixed template phrase.

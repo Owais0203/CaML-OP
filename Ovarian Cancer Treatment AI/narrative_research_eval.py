@@ -45,7 +45,8 @@ from code import subgroup_indices
 from llm_narrative_agent import (
     NarrativeInputs, NarrativeOutput, CitedValue,
     check_sign, check_features, check_numeric,
-    generate_and_check, mock_llm, run_eval,
+    default_verifiers, generate_and_check, mock_llm, run_eval,
+    _dominant_uncertainty_source,
 )
 from run_narrative_pipeline import prepare_patient_rows
 
@@ -110,10 +111,13 @@ def compare_subgroups(results: pd.DataFrame, X_sample: np.ndarray, patient_ids: 
 # ---------------------------------------------------------------------------
 # 2. Verifier stress test -- checks as a diagnostic classifier
 # ---------------------------------------------------------------------------
-def _base_inputs(must_abstain: bool = False, tau_hat: float = 0.08) -> NarrativeInputs:
+def _base_inputs(must_abstain: bool = False, tau_hat: float = 0.08,
+                 mu0: float = 0.30, mu1: float = 0.38,
+                 tau_r: float = 0.07, tau_dr: float = 0.09) -> NarrativeInputs:
     return NarrativeInputs(
         "STRESS", {"age": 55.0, "stage": 2, "race": 0, "ethnicity": 0, "intent": 1},
         tau_hat=tau_hat, ci_lo=tau_hat - 0.10, ci_hi=tau_hat + 0.10,
+        mu0=mu0, mu1=mu1, tau_r=tau_r, tau_dr=tau_dr,
         top_positive=[("age", 0.03), ("stage", 0.01)],
         top_negative=[("ethnicity", -0.02)],
         must_abstain=must_abstain,
@@ -123,52 +127,72 @@ def _base_inputs(must_abstain: bool = False, tau_hat: float = 0.08) -> Narrative
 def _stress_cases():
     """(name, ground-truth is_faithful, inputs, output) tuples. Ground
     truth is known by construction -- each case is deliberately built to
-    be faithful or to contain exactly one class of violation."""
+    be faithful or to contain exactly one class of violation. Every
+    "faithful" case's output must satisfy ALL five default verifiers, not
+    just the one the case name targets -- adding mu0/mu1 citation and
+    dominant_uncertainty_source to every case (including ones testing an
+    unrelated check) is what keeps the ground-truth labels accurate
+    against the full gate, not just the original three checks."""
     inp = _base_inputs()
-    abstain_inp = _base_inputs(must_abstain=True, tau_hat=0.005)
+    abstain_inp = _base_inputs(must_abstain=True, tau_hat=0.005, mu0=0.40, mu1=0.401,
+                               tau_r=0.001, tau_dr=0.003)
     true_drivers = inp.true_drivers()
+    dom = _dominant_uncertainty_source(inp)          # "identification" for these numbers
+    dom_abstain = _dominant_uncertainty_source(abstain_inp)
+    mu_cites = [CitedValue("mu0", inp.mu0), CitedValue("mu1", inp.mu1)]
+    mu_cites_abstain = [CitedValue("mu0", abstain_inp.mu0), CitedValue("mu1", abstain_inp.mu1)]
 
     cases = [
         ("faithful_baseline", True, inp,
-         NarrativeOutput("x", "positive", ["age"], [CitedValue("tau_hat", inp.tau_hat)])),
+         NarrativeOutput("x", "positive", ["age"], [CitedValue("tau_hat", inp.tau_hat)] + mu_cites, dom)),
         ("faithful_cites_all_drivers", True, inp,
-         NarrativeOutput("x", "positive", list(true_drivers), [CitedValue("tau_hat", inp.tau_hat)])),
+         NarrativeOutput("x", "positive", list(true_drivers), [CitedValue("tau_hat", inp.tau_hat)] + mu_cites, dom)),
         ("faithful_numeric_within_atol_floor", True, inp,
-         NarrativeOutput("x", "positive", ["age"], [CitedValue("tau_hat", inp.tau_hat + 0.001)])),
+         NarrativeOutput("x", "positive", ["age"], [CitedValue("tau_hat", inp.tau_hat + 0.001)] + mu_cites, dom)),
         ("wrong_sign", False, inp,
-         NarrativeOutput("x", "negative", ["age"], [CitedValue("tau_hat", inp.tau_hat)])),
+         NarrativeOutput("x", "negative", ["age"], [CitedValue("tau_hat", inp.tau_hat)] + mu_cites, dom)),
         ("hallucinated_feature", False, inp,
-         NarrativeOutput("x", "positive", ["race"], [CitedValue("tau_hat", inp.tau_hat)])),
+         NarrativeOutput("x", "positive", ["race"], [CitedValue("tau_hat", inp.tau_hat)] + mu_cites, dom)),
         ("hallucinated_quantity_tag", False, inp,
-         NarrativeOutput("x", "positive", ["age"], [CitedValue("shap:race", 0.05)])),
+         NarrativeOutput("x", "positive", ["age"], [CitedValue("shap:race", 0.05)] + mu_cites, dom)),
         ("numeric_off_by_50pct", False, inp,
-         NarrativeOutput("x", "positive", ["age"], [CitedValue("tau_hat", inp.tau_hat * 1.5)])),
+         NarrativeOutput("x", "positive", ["age"], [CitedValue("tau_hat", inp.tau_hat * 1.5)] + mu_cites, dom)),
         ("empty_citation_when_drivers_exist", False, inp,
-         NarrativeOutput("x", "positive", [], [CitedValue("tau_hat", inp.tau_hat)])),
+         NarrativeOutput("x", "positive", [], [CitedValue("tau_hat", inp.tau_hat)] + mu_cites, dom)),
         ("mixed_true_and_hallucinated_feature", False, inp,
-         NarrativeOutput("x", "positive", ["age", "race"], [CitedValue("tau_hat", inp.tau_hat)])),
+         NarrativeOutput("x", "positive", ["age", "race"], [CitedValue("tau_hat", inp.tau_hat)] + mu_cites, dom)),
         ("abstains_correctly", True, abstain_inp,
-         NarrativeOutput("x", "indeterminate", ["age"], [CitedValue("tau_hat", abstain_inp.tau_hat)])),
+         NarrativeOutput("x", "indeterminate", ["age"], [CitedValue("tau_hat", abstain_inp.tau_hat)] + mu_cites_abstain, dom_abstain)),
         ("overconfident_should_abstain", False, abstain_inp,
-         NarrativeOutput("x", "positive", ["age"], [CitedValue("tau_hat", abstain_inp.tau_hat)])),
+         NarrativeOutput("x", "positive", ["age"], [CitedValue("tau_hat", abstain_inp.tau_hat)] + mu_cites_abstain, dom_abstain)),
         ("abstains_when_it_shouldnt", False, inp,
-         NarrativeOutput("x", "indeterminate", ["age"], [CitedValue("tau_hat", inp.tau_hat)])),
+         NarrativeOutput("x", "indeterminate", ["age"], [CitedValue("tau_hat", inp.tau_hat)] + mu_cites, dom)),
+        # -- causal-structure checks --
+        ("counterfactual_contradiction", False, inp,
+         NarrativeOutput("x", "positive", ["age"], [CitedValue("tau_hat", inp.tau_hat),
+                         CitedValue("mu0", inp.mu1), CitedValue("mu1", inp.mu0)], dom)),  # arms swapped
+        ("counterfactual_missing_citation", False, inp,
+         NarrativeOutput("x", "positive", ["age"], [CitedValue("tau_hat", inp.tau_hat)], dom)),  # no mu0/mu1 at all
+        ("wrong_dominant_uncertainty_source", False, inp,
+         NarrativeOutput("x", "positive", ["age"], [CitedValue("tau_hat", inp.tau_hat)] + mu_cites,
+                         "sampling" if dom != "sampling" else "model_disagreement")),
     ]
     return cases
 
 
 def run_verifier_stress_test() -> pd.DataFrame:
+    """Runs every default verifier (not a hardcoded subset), so a new
+    Verifier appended to default_verifiers() is automatically covered by
+    this stress test without editing this function too."""
+    verifiers = default_verifiers()
     rows = []
     for name, is_faithful, case_inp, out in _stress_cases():
-        pass_sign = check_sign(out, case_inp)
-        pass_features = check_features(out, case_inp)
-        pass_numeric = check_numeric(out, case_inp)
-        predicted_faithful = pass_sign and pass_features and pass_numeric
+        results = {v.name: v.check(out, case_inp) for v in verifiers}
+        predicted_faithful = all(results.values())
         rows.append({
             "case": name, "true_faithful": is_faithful,
             "predicted_faithful": predicted_faithful,
-            "pass_sign": pass_sign, "pass_features": pass_features,
-            "pass_numeric": pass_numeric,
+            **{f"pass_{k}": v for k, v in results.items()},
             "correct": predicted_faithful == is_faithful,
         })
     return pd.DataFrame(rows)
@@ -208,14 +232,17 @@ def make_stochastic_mock(error_rate: float = 0.3, seed: int = 0):
         violation = rng.choice(["sign", "feature", "numeric"])
         if violation == "sign" and good.sign in ("positive", "negative"):
             bad_sign = "negative" if good.sign == "positive" else "positive"
-            return NarrativeOutput(good.narrative, bad_sign, good.cited_features, good.cited_values)
+            return NarrativeOutput(good.narrative, bad_sign, good.cited_features,
+                                   good.cited_values, good.dominant_uncertainty_source)
         if violation == "feature":
             all_feats = {"age", "stage", "race", "ethnicity", "intent"}
             hallucinated = list(all_feats - inputs.true_drivers())
             feat = rng.choice(hallucinated) if hallucinated else "age"
-            return NarrativeOutput(good.narrative, good.sign, [feat], good.cited_values)
+            return NarrativeOutput(good.narrative, good.sign, [feat],
+                                   good.cited_values, good.dominant_uncertainty_source)
         bad_values = [CitedValue(cv.quantity, cv.value * 3 + 1) for cv in good.cited_values]
-        return NarrativeOutput(good.narrative, good.sign, good.cited_features, bad_values)
+        return NarrativeOutput(good.narrative, good.sign, good.cited_features,
+                               bad_values, good.dominant_uncertainty_source)
 
     return stochastic
 

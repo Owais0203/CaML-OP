@@ -43,10 +43,12 @@ def prepare_patient_rows(n_patients: int = 30, seed: int = 42, verbose: bool = T
     subgroup breakdown) instead of duplicating this fitting logic.
 
     Returns (patient_rows, X_sample, sample_idx, calib_factor, fitted).
-    `fitted` is a dict {"model", "m0", "m1"} exposing the already-fitted
-    CaML-OP effect model and arm-level outcome models, so a caller (e.g.
-    counterfactual_query.py) can recompute estimates under a perturbed
-    covariate without re-fitting from scratch.
+    `fitted` is a dict {"model", "m0", "m1", "X_tr", "T_tr", "Y_tr",
+    "shap_values", "feature_names"} exposing the already-fitted CaML-OP
+    effect model, arm-level outcome models, and the raw training fold, so
+    a caller (e.g. counterfactual_query.py or dashboard.py) can recompute
+    estimates under a perturbed covariate, or fit a survival model, without
+    re-fitting or re-loading anything from scratch.
     """
     def log(msg):
         if verbose:
@@ -133,7 +135,9 @@ def prepare_patient_rows(n_patients: int = 30, seed: int = 42, verbose: bool = T
             top_negative=neg,
             must_abstain=bool(must_abstain[i]),
         ))
-    fitted = {"model": model, "m0": m0, "m1": m1}
+    fitted = {"model": model, "m0": m0, "m1": m1,
+             "X_tr": X_tr, "T_tr": T_tr, "Y_tr": Y_tr,
+             "shap_values": shap_values, "feature_names": feature_names}
     return patient_rows, X_sample, sample_idx, global_calib_factor, fitted
 
 

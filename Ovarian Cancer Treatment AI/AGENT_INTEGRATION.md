@@ -537,3 +537,103 @@ would click. No live pass-rate evaluation of this tool's verifiers against
 a real LLM backend (same caveat as the base narrative agent's RQ2 number:
 the mock backend's pass-rate describes the checking logic, not an LLM's
 behavior). Both are natural next steps, not silently dropped.
+
+UPDATE: the dashboard-UI gap above is now closed -- see the next section.
+
+## Dashboard wiring (`dashboard.py`)
+
+The thesis's "Clinical dashboard prototype" (Section 3.5) was, until now,
+a static mockup image (`media/image3.png`) describing five panels that no
+code in this repository actually computed together. `dashboard.py` is the
+first runnable version: a Streamlit app that wires each already-built
+piece of this pipeline to the panel the thesis says it should be.
+
+**Panel -> code mapping** (matches the Figure 3.4 caption's numbering):
+
+1. **ITE gauge** -- `effect_shap.CaMLOPEffectModel.predict`/`predict_interval`
+   for the selected patient, rendered as a point estimate with a shaded
+   calibrated-interval band; gray and non-directional when
+   `calibrated_abstention.should_abstain` fired for that patient (the
+   gauge visually inherits the same abstention logic the narrative agent
+   already obeys, rather than a separate rule).
+2. **Counterfactual survival curves** -- reuses `code.py`'s own "adapt
+   Cox PH to a fixed 5-year horizon" trick (`fit_predictive_baselines`),
+   refit on 15 bootstrap resamples of the training fold so the two arms
+   (T=0 vs. T=1) get an approximate percentile uncertainty band, not just
+   a point curve. This is new modeling code (the base pipeline only ever
+   used Cox PH as a scalar AUC/Brier baseline, never plotted a full
+   curve) but reuses the exact fitting convention already validated
+   elsewhere in `code.py`, not a new approach invented for the dashboard.
+3. **Effect-SHAP waterfall** -- `effect_shap.compute_effect_shap`'s
+   already-computed per-patient SHAP row (now exposed by
+   `prepare_patient_rows`'s `fitted` dict instead of being discarded
+   after `top_features()` extracts only the top-k), rendered as a
+   diverging horizontal bar chart.
+4. **LLM narrative panel** -- `llm_narrative_agent.generate_and_check`
+   run live in the app for the selected patient, with a pass/fail badge
+   per verifier and an explicit ESCALATED state when retries are
+   exhausted, so the UI never silently hides a failed check.
+5. **Transparency card** -- reads this run's own
+   `caml_op_outputs/summary_pehe.csv` / `summary_subgroup.csv` (not
+   hardcoded numbers) for the overall PEHE and subgroup PEHE range, plus
+   the coverage figure already reported in the thesis. Rendered in a
+   plain always-visible container, never inside a collapsible/dismissable
+   widget -- the same "non-dismissable" requirement the thesis states for
+   this card is enforced by simply never giving it a collapse control,
+   not by a UI setting that could be toggled off.
+
+**Plus the interactive piece the static mockup never had**: a sidebar
+"Ask a bounded what-if question" control wired directly to
+`counterfactual_query.query_counterfactual` (PR #5) -- one bounded tool,
+not a chat box, for the reasons in the section above. Its answer and
+verifier badges render inline below the narrative panel using the same
+pass/fail treatment as panel 4, so a clinician sees the same faithfulness
+discipline on a follow-up question as on the initial narrative.
+
+### How to run it
+
+```bash
+cd "Ovarian Cancer Treatment AI"
+pip install streamlit          # not previously a dependency of this repo
+streamlit run dashboard.py
+```
+
+No `requirements.txt` exists yet for this project (every other script in
+this directory has so far assumed a manually-installed environment); the
+full set needed to run `dashboard.py` is: `numpy`, `pandas`,
+`matplotlib`, `scikit-learn`, `xgboost`, `econml`, `shap`, `lifelines`,
+`streamlit`, and optionally `anthropic` for the live-API toggle. Adding a
+`requirements.txt` that pins these is a reasonable next step but wasn't
+done here to avoid guessing version constraints this environment's
+resolver didn't actually need to enforce.
+
+By default everything runs on the mock LLM backend (no API key needed).
+Setting `ANTHROPIC_API_KEY` in the environment before launching enables a
+sidebar checkbox to switch both the narrative panel and the what-if tool
+to live Claude calls.
+
+**Verified, not just written**: exercised headlessly via Streamlit's
+`AppTest` API (`streamlit.testing.v1.AppTest`) against the real TCGA-OV
+pipeline -- loads the model, renders all five panels for a sampled
+patient, asks a live what-if query through the sidebar control, and
+asserts no exception is raised anywhere in the run. This is the same
+level of verification `run_narrative_pipeline.py` and
+`counterfactual_query.py` got (a real end-to-end run, not a unit test in
+isolation), extended to the one part of this pipeline that has a UI to
+exercise.
+
+### Deliberately not done
+
+No usability testing with clinical staff (the thesis's own Limitations
+section already flags this for the mockup and it remains true for the
+running version -- a developer-intuitive layout is not the same claim as
+a clinician-validated one). No authentication, multi-user session
+handling, or deployment beyond a local `streamlit run` -- this is a
+research-prototype UI for one person exploring one model run, not a
+service. No live pass-rate evaluation of the narrative panel or the
+what-if tool against a real LLM backend from inside the dashboard itself
+(the mock backend's pass-rate describes the checking logic, not an LLM's
+behavior, same caveat as everywhere else in this document). The Cox PH
+bootstrap survival-curve band is an approximate percentile interval from
+15 resamples, not a formally derived confidence band -- stated in the
+panel's own caption, not left implicit.

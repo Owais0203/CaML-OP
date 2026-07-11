@@ -453,3 +453,87 @@ overall), and `run_narrative_pipeline.py` runs end-to-end against the real
 TCGA-OV data with all four wired in, producing narratives that visibly
 differ in their stated dominant uncertainty source from patient to
 patient rather than a fixed template phrase.
+
+## Bounded query interface, not open-ended chat (`counterfactual_query.py`)
+
+A chat-style extension to the narrative module was proposed mid-session
+("what if a clinician could ask follow-up questions about a patient's
+estimate?"). Before building it, a literature check was run specifically
+to test that idea rather than assume it was a good one. The results
+sharpened the design rather than confirming the premise:
+
+- **Open-ended clinical LLM chat has a measured, non-trivial hallucination
+  rate.** One cited study found a 12.5% hallucination rate for LLMs
+  generating cancer treatment information; broader safety surveys put
+  "problematic response" rates at 21.6%–43.2% depending on model, with
+  unsafe response rates of 5%–13%. This is a direct argument against a
+  freeform text box for clinical questions, not just a generic caution.
+- **Conversational XAI produces faster understanding and higher trust than
+  static dashboards, but the same literature documents it promoting
+  overreliance** — users accepting recommendations too readily without
+  critical evaluation, an effect that **builds over repeated turns**, not
+  just present on a single response. This lands directly on the thesis's
+  own "Automation bias and clinician oversight" limitation, now with
+  measured RCT evidence behind it rather than a theoretical concern.
+- **IMPACT** ("an interactive multi-disease prevention and counterfactual
+  treatment system using explainable AI and a multimodal LLM",
+  PMC12192960) is published precedent for a different shape: bounded
+  interactive counterfactual querying — "what adjustment to this feature
+  reduces risk" — over a model, rather than open conversation. This is
+  real precedent that a bounded tool-query pattern is a recognized,
+  published approach to this problem, not something invented from
+  scratch for this thesis.
+- **VeriFact** (verifying LLM-generated clinical text against structured
+  EHR data) already justified the base narrative agent's per-claim
+  verification design (see above); the same discipline needed to extend
+  to any follow-up interaction, not relax for the sake of a conversational
+  feel.
+
+**What was built.** One bounded tool, `query_counterfactual` — not a chat
+box. A clinician (or dashboard) asks a single structured question ("what
+if `age` were adjusted by −5?"), `counterfactual_query.py` recomputes
+`tau_hat`/`mu0`/`mu1`/the calibrated interval under the perturbed
+covariate using the already-fitted CaML-OP model (no refitting — a bounded
+query has to be cheap enough to answer interactively), and an LLM narrates
+the delta via the same structured-tool-call pattern as the base narrative
+agent. The answer is checked by three verifiers before being shown,
+mirroring `llm_narrative_agent.py`'s generate → check → targeted-feedback
+→ retry loop exactly (including `NarrativeStatus.ESCALATED` as the
+terminal state):
+
+- `check_cf_numeric` — every cited value (baseline/counterfactual
+  `tau_hat`, `delta_tau`, `mu0_cf`, `mu1_cf`, interval bounds) matches the
+  recomputed ground truth within tolerance, not left to the model's own
+  arithmetic.
+- `check_cf_direction` — the declared "improves"/"worsens"/
+  "no_meaningful_change" must match the actual sign of the recomputed
+  `delta_tau` past a fixed epsilon, so a claimed direction can't drift from
+  the numbers backing it.
+- `check_cf_calibration_restated` — **the concrete countermeasure to the
+  overreliance-builds-over-repeated-turns finding above.** The literature
+  said a one-time disclaimer isn't enough; this makes that a hard,
+  per-query verifier instead of a prompt instruction the model could drift
+  away from three turns into a session. Every single answer must correctly
+  restate whether the counterfactual estimate is calibration-reliable,
+  freshly recomputed for that specific counterfactual point — an LLM that
+  "forgets" to restate it on query 3 fails exactly the same check that
+  catches it on query 1.
+
+**Verified, not just asserted.** `counterfactual_query.py` is runnable
+standalone (`python counterfactual_query.py`) against the real TCGA-OV
+pipeline with zero API key required (mock backend): it fits the model
+once via `run_narrative_pipeline.prepare_patient_rows`'s now-exposed
+`fitted` dict, asks two real what-if questions about a sampled patient's
+top SHAP driver, and prints both. It also includes a retry-loop smoke test
+using a flaky mock that deliberately omits the calibration restatement
+once (the literature's specific failure mode) — the loop catches it and
+self-corrects on retry, asserted programmatically (`attempts == 2`), not
+just eyeballed.
+
+**Deliberately not done.** No dashboard UI wiring — the thesis's
+"Clinical dashboard prototype" (Section 3.5) is a static mockup image, not
+running code, and this tool is not yet wired into anything a clinician
+would click. No live pass-rate evaluation of this tool's verifiers against
+a real LLM backend (same caveat as the base narrative agent's RQ2 number:
+the mock backend's pass-rate describes the checking logic, not an LLM's
+behavior). Both are natural next steps, not silently dropped.

@@ -42,7 +42,11 @@ def prepare_patient_rows(n_patients: int = 30, seed: int = 42, verbose: bool = T
     can reuse the exact same patients (and their raw covariates, for the
     subgroup breakdown) instead of duplicating this fitting logic.
 
-    Returns (patient_rows, X_sample, sample_idx, calib_factor).
+    Returns (patient_rows, X_sample, sample_idx, calib_factor, fitted).
+    `fitted` is a dict {"model", "m0", "m1"} exposing the already-fitted
+    CaML-OP effect model and arm-level outcome models, so a caller (e.g.
+    counterfactual_query.py) can recompute estimates under a perturbed
+    covariate without re-fitting from scratch.
     """
     def log(msg):
         if verbose:
@@ -129,12 +133,13 @@ def prepare_patient_rows(n_patients: int = 30, seed: int = 42, verbose: bool = T
             top_negative=neg,
             must_abstain=bool(must_abstain[i]),
         ))
-    return patient_rows, X_sample, sample_idx, global_calib_factor
+    fitted = {"model": model, "m0": m0, "m1": m1}
+    return patient_rows, X_sample, sample_idx, global_calib_factor, fitted
 
 
 def main(n_patients: int = 30, seed: int = 42, live: bool = False):
     os.makedirs(OUT_DIR, exist_ok=True)
-    patient_rows, X_sample, sample_idx, calib_factor = prepare_patient_rows(n_patients, seed)
+    patient_rows, X_sample, sample_idx, calib_factor, _fitted = prepare_patient_rows(n_patients, seed)
     must_abstain = np.array([inp.must_abstain for inp in patient_rows])
 
     llm_fn = call_claude if live else mock_llm

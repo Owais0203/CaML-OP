@@ -453,3 +453,187 @@ overall), and `run_narrative_pipeline.py` runs end-to-end against the real
 TCGA-OV data with all four wired in, producing narratives that visibly
 differ in their stated dominant uncertainty source from patient to
 patient rather than a fixed template phrase.
+
+## Bounded query interface, not open-ended chat (`counterfactual_query.py`)
+
+A chat-style extension to the narrative module was proposed mid-session
+("what if a clinician could ask follow-up questions about a patient's
+estimate?"). Before building it, a literature check was run specifically
+to test that idea rather than assume it was a good one. The results
+sharpened the design rather than confirming the premise:
+
+- **Open-ended clinical LLM chat has a measured, non-trivial hallucination
+  rate.** One cited study found a 12.5% hallucination rate for LLMs
+  generating cancer treatment information; broader safety surveys put
+  "problematic response" rates at 21.6%–43.2% depending on model, with
+  unsafe response rates of 5%–13%. This is a direct argument against a
+  freeform text box for clinical questions, not just a generic caution.
+- **Conversational XAI produces faster understanding and higher trust than
+  static dashboards, but the same literature documents it promoting
+  overreliance** — users accepting recommendations too readily without
+  critical evaluation, an effect that **builds over repeated turns**, not
+  just present on a single response. This lands directly on the thesis's
+  own "Automation bias and clinician oversight" limitation, now with
+  measured RCT evidence behind it rather than a theoretical concern.
+- **IMPACT** ("an interactive multi-disease prevention and counterfactual
+  treatment system using explainable AI and a multimodal LLM",
+  PMC12192960) is published precedent for a different shape: bounded
+  interactive counterfactual querying — "what adjustment to this feature
+  reduces risk" — over a model, rather than open conversation. This is
+  real precedent that a bounded tool-query pattern is a recognized,
+  published approach to this problem, not something invented from
+  scratch for this thesis.
+- **VeriFact** (verifying LLM-generated clinical text against structured
+  EHR data) already justified the base narrative agent's per-claim
+  verification design (see above); the same discipline needed to extend
+  to any follow-up interaction, not relax for the sake of a conversational
+  feel.
+
+**What was built.** One bounded tool, `query_counterfactual` — not a chat
+box. A clinician (or dashboard) asks a single structured question ("what
+if `age` were adjusted by −5?"), `counterfactual_query.py` recomputes
+`tau_hat`/`mu0`/`mu1`/the calibrated interval under the perturbed
+covariate using the already-fitted CaML-OP model (no refitting — a bounded
+query has to be cheap enough to answer interactively), and an LLM narrates
+the delta via the same structured-tool-call pattern as the base narrative
+agent. The answer is checked by three verifiers before being shown,
+mirroring `llm_narrative_agent.py`'s generate → check → targeted-feedback
+→ retry loop exactly (including `NarrativeStatus.ESCALATED` as the
+terminal state):
+
+- `check_cf_numeric` — every cited value (baseline/counterfactual
+  `tau_hat`, `delta_tau`, `mu0_cf`, `mu1_cf`, interval bounds) matches the
+  recomputed ground truth within tolerance, not left to the model's own
+  arithmetic.
+- `check_cf_direction` — the declared "improves"/"worsens"/
+  "no_meaningful_change" must match the actual sign of the recomputed
+  `delta_tau` past a fixed epsilon, so a claimed direction can't drift from
+  the numbers backing it.
+- `check_cf_calibration_restated` — **the concrete countermeasure to the
+  overreliance-builds-over-repeated-turns finding above.** The literature
+  said a one-time disclaimer isn't enough; this makes that a hard,
+  per-query verifier instead of a prompt instruction the model could drift
+  away from three turns into a session. Every single answer must correctly
+  restate whether the counterfactual estimate is calibration-reliable,
+  freshly recomputed for that specific counterfactual point — an LLM that
+  "forgets" to restate it on query 3 fails exactly the same check that
+  catches it on query 1.
+
+**Verified, not just asserted.** `counterfactual_query.py` is runnable
+standalone (`python counterfactual_query.py`) against the real TCGA-OV
+pipeline with zero API key required (mock backend): it fits the model
+once via `run_narrative_pipeline.prepare_patient_rows`'s now-exposed
+`fitted` dict, asks two real what-if questions about a sampled patient's
+top SHAP driver, and prints both. It also includes a retry-loop smoke test
+using a flaky mock that deliberately omits the calibration restatement
+once (the literature's specific failure mode) — the loop catches it and
+self-corrects on retry, asserted programmatically (`attempts == 2`), not
+just eyeballed.
+
+**Deliberately not done.** No dashboard UI wiring — the thesis's
+"Clinical dashboard prototype" (Section 3.5) is a static mockup image, not
+running code, and this tool is not yet wired into anything a clinician
+would click. No live pass-rate evaluation of this tool's verifiers against
+a real LLM backend (same caveat as the base narrative agent's RQ2 number:
+the mock backend's pass-rate describes the checking logic, not an LLM's
+behavior). Both are natural next steps, not silently dropped.
+
+UPDATE: the dashboard-UI gap above is now closed -- see the next section.
+
+## Dashboard wiring (`dashboard.py`)
+
+The thesis's "Clinical dashboard prototype" (Section 3.5) was, until now,
+a static mockup image (`media/image3.png`) describing five panels that no
+code in this repository actually computed together. `dashboard.py` is the
+first runnable version: a Streamlit app that wires each already-built
+piece of this pipeline to the panel the thesis says it should be.
+
+**Panel -> code mapping** (matches the Figure 3.4 caption's numbering):
+
+1. **ITE gauge** -- `effect_shap.CaMLOPEffectModel.predict`/`predict_interval`
+   for the selected patient, rendered as a point estimate with a shaded
+   calibrated-interval band; gray and non-directional when
+   `calibrated_abstention.should_abstain` fired for that patient (the
+   gauge visually inherits the same abstention logic the narrative agent
+   already obeys, rather than a separate rule).
+2. **Counterfactual survival curves** -- reuses `code.py`'s own "adapt
+   Cox PH to a fixed 5-year horizon" trick (`fit_predictive_baselines`),
+   refit on 15 bootstrap resamples of the training fold so the two arms
+   (T=0 vs. T=1) get an approximate percentile uncertainty band, not just
+   a point curve. This is new modeling code (the base pipeline only ever
+   used Cox PH as a scalar AUC/Brier baseline, never plotted a full
+   curve) but reuses the exact fitting convention already validated
+   elsewhere in `code.py`, not a new approach invented for the dashboard.
+3. **Effect-SHAP waterfall** -- `effect_shap.compute_effect_shap`'s
+   already-computed per-patient SHAP row (now exposed by
+   `prepare_patient_rows`'s `fitted` dict instead of being discarded
+   after `top_features()` extracts only the top-k), rendered as a
+   diverging horizontal bar chart.
+4. **LLM narrative panel** -- `llm_narrative_agent.generate_and_check`
+   run live in the app for the selected patient, with a pass/fail badge
+   per verifier and an explicit ESCALATED state when retries are
+   exhausted, so the UI never silently hides a failed check.
+5. **Transparency card** -- reads this run's own
+   `caml_op_outputs/summary_pehe.csv` / `summary_subgroup.csv` (not
+   hardcoded numbers) for the overall PEHE and subgroup PEHE range, plus
+   the coverage figure already reported in the thesis. Rendered in a
+   plain always-visible container, never inside a collapsible/dismissable
+   widget -- the same "non-dismissable" requirement the thesis states for
+   this card is enforced by simply never giving it a collapse control,
+   not by a UI setting that could be toggled off.
+
+**Plus the interactive piece the static mockup never had**: a sidebar
+"Ask a bounded what-if question" control wired directly to
+`counterfactual_query.query_counterfactual` (PR #5) -- one bounded tool,
+not a chat box, for the reasons in the section above. Its answer and
+verifier badges render inline below the narrative panel using the same
+pass/fail treatment as panel 4, so a clinician sees the same faithfulness
+discipline on a follow-up question as on the initial narrative.
+
+### How to run it
+
+```bash
+cd "Ovarian Cancer Treatment AI"
+pip install streamlit          # not previously a dependency of this repo
+streamlit run dashboard.py
+```
+
+No `requirements.txt` exists yet for this project (every other script in
+this directory has so far assumed a manually-installed environment); the
+full set needed to run `dashboard.py` is: `numpy`, `pandas`,
+`matplotlib`, `scikit-learn`, `xgboost`, `econml`, `shap`, `lifelines`,
+`streamlit`, and optionally `anthropic` for the live-API toggle. Adding a
+`requirements.txt` that pins these is a reasonable next step but wasn't
+done here to avoid guessing version constraints this environment's
+resolver didn't actually need to enforce.
+
+By default everything runs on the mock LLM backend (no API key needed).
+Setting `ANTHROPIC_API_KEY` in the environment before launching enables a
+sidebar checkbox to switch both the narrative panel and the what-if tool
+to live Claude calls.
+
+**Verified, not just written**: exercised headlessly via Streamlit's
+`AppTest` API (`streamlit.testing.v1.AppTest`) against the real TCGA-OV
+pipeline -- loads the model, renders all five panels for a sampled
+patient, asks a live what-if query through the sidebar control, and
+asserts no exception is raised anywhere in the run. This is the same
+level of verification `run_narrative_pipeline.py` and
+`counterfactual_query.py` got (a real end-to-end run, not a unit test in
+isolation), extended to the one part of this pipeline that has a UI to
+exercise.
+
+### Deliberately not done
+
+No usability testing with clinical staff (the thesis's own Limitations
+section already flags this for the mockup and it remains true for the
+running version -- a developer-intuitive layout is not the same claim as
+a clinician-validated one). No authentication, multi-user session
+handling, or deployment beyond a local `streamlit run` -- this is a
+research-prototype UI for one person exploring one model run, not a
+service. No live pass-rate evaluation of the narrative panel or the
+what-if tool against a real LLM backend from inside the dashboard itself
+(the mock backend's pass-rate describes the checking logic, not an LLM's
+behavior, same caveat as everywhere else in this document). The Cox PH
+bootstrap survival-curve band is an approximate percentile interval from
+15 resamples, not a formally derived confidence band -- stated in the
+panel's own caption, not left implicit.

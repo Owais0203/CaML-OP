@@ -280,7 +280,7 @@ def main(n_patients: int = 40, seed: int = 42):
     print("=" * 70)
     print("1. SUBGROUP BREAKDOWN (ties RQ2 narrative fidelity to RQ3 fairness)")
     print("=" * 70)
-    patient_rows, X_sample, sample_idx, calib_factor = prepare_patient_rows(
+    patient_rows, X_sample, sample_idx, calib_factor, _fitted = prepare_patient_rows(
         n_patients=n_patients, seed=seed, verbose=False)
     results = run_eval(patient_rows, llm_fn=mock_llm, model_name="mock", max_retries=2)
     patient_ids = [inp.patient_id for inp in patient_rows]

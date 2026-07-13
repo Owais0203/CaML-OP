@@ -16,6 +16,8 @@ Supervisor: Ishansh Gupta
 
 Co-Supervisor: Prof. Dr. Hendro Wicaksono
 
+Co-Supervisor: Aris Dressino
+
 Submission: 19 May 2026
 
 \chapter*{Statutory Declaration}
@@ -91,9 +93,11 @@ Date, Signature
 
 First and foremost, I want to express my sincere gratitude to my supervisor, Ishansh Gupta, for his invaluable guidance and technical feedback throughout the development of CaML-OP. His patience through the countless iterations of this pipeline truly shaped the final form of this work.
 
-I am equally grateful to my co-supervisor, Prof. Dr. Hendro Wicaksono, for his oversight of the academic process and his sharp, constructive criticism of the regulatory framing.
+I am equally grateful to my co-supervisors, Prof. Dr. Hendro Wicaksono and Aris Dressino, for their oversight of the academic process and their sharp, constructive criticism of the regulatory framing.
 
 My thanks also go to the faculty and staff at the School of Computer Science and Engineering at Constructor University for providing the academic environment that made this thesis possible.
+
+I also want to thank Aris Dressino for their contributions to this work.
 
 Finally, I gratefully acknowledge The Cancer Genome Atlas (TCGA) Research Network and the National Cancer Institute for making the TCGA-OV dataset publicly available. This work would also not be possible without the incredible open-source communities behind EconML, XGBoost, scikit-learn, lifelines, and the broader Python scientific ecosystem.
 
@@ -106,7 +110,7 @@ This thesis introduces CaML-OP (Causal Machine Learning for Oncology Personaliza
 
 We evaluated the pipeline using TCGA-OV covariates (leaving a working sample of n = 547 after preprocessing) across a semi-synthetic benchmark with four data-generating processes and ten runs per scenario. We tested it against six causal baselines and three binary-outcome predictive comparators. To confirm the architecture was stable and statistically consistent, we ran a purely synthetic verification at N up to 4000.
 
-Using the off-policy AIPW estimator, CaML-OP hit the highest mean estimated policy value (V = 0.559). However, because the estimator ranks the "treat-all" and "oracle" benchmarks very close together, this result means that CaML-OP\textquotesingle s estimated value is not statistically distinguishable from the oracle benchmark under this finite-sample off-policy estimator (Wilcoxon p = 0.42), rather than proving it is fully equivalent to knowing the true treatment effects. Notably, CaML-OP is the only ensemble to provide an approximate patient-level uncertainty interval; its empirical coverage on the test set reached 0.847 against a nominal 0.95 target. Subgroup PEHE showed only minor variations across age, FIGO stage, and race strata, indicating no major error concentration on this benchmark, though this does not constitute a full fairness audit.
+Using a doubly-robust augmented inverse-propensity-weighted (AIPW) estimator, CaML-OP achieved the highest mean estimated policy value among the seven causal methods (V = 0.569), second overall behind only the oracle benchmark (0.574) -- the ordering a correctly-specified doubly-robust estimator should produce. Because the estimator ranks the "treat-all" baseline and the DR-Learner close to CaML-OP as well, this result means that CaML-OP\textquotesingle s estimated value is not statistically distinguishable from the oracle benchmark under this finite-sample off-policy estimator (Wilcoxon p = 0.88), rather than proving it is fully equivalent to knowing the true treatment effects. Notably, CaML-OP is the only ensemble to provide an approximate patient-level uncertainty interval; its empirical coverage on the test set reached 0.847 against a nominal 0.95 target. Subgroup PEHE showed only minor variations across age, FIGO stage, and race strata, indicating no major error concentration on this benchmark, though this does not constitute a full fairness audit.
 
 Ultimately, the core contribution of this work is at the system level. We have built a unified framework that weaves together XGBoost leaf embeddings, R/DR ensembles, causal explainability, and EU AI Act-informed design to estimate individual treatment effects in ovarian cancer from routine clinical data. CaML-OP is presented strictly as a research prototype, not a deployable clinical tool.
 

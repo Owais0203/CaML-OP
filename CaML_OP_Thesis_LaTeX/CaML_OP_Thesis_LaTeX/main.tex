@@ -217,9 +217,30 @@ Standard SHAP (Lundberg and Lee, 2017) attributes a predictive score to input fe
 
 \subsection{LLM narrative and faithfulness checks}\label{llm-narrative-and-faithfulness-checks}
 
-The narrative module takes the patient\textquotesingle s covariate values, the estimated ITE with its approximate uncertainty interval, and the top three Effect-SHAP drivers in each direction as prompt inputs. The LLM is instructed to produce a two- to three-sentence clinical summary that accurately represents the ITE sign and magnitude, names the dominant SHAP features and acknowledges uncertainty. No medical knowledge beyond these inputs is permitted in the output.
+The narrative module takes the patient\textquotesingle s covariate values; the estimated ITE with its uncertainty interval; the top three Effect-SHAP drivers in each direction; the two arm-level outcome estimates E{[}Y\textbar X,T=0{]} and E{[}Y\textbar X,T=1{]} used by the AIPW policy-value estimator (Section 4.4); and the R-Learner and DR-Learner component estimates that precede ensembling, as prompt inputs. The LLM is instructed to produce a two- to three-sentence clinical summary that accurately represents the ITE sign and magnitude, names the dominant SHAP features, states which arm-level outcome is larger, names the dominant source of uncertainty for this patient, and acknowledges uncertainty. No medical knowledge beyond these inputs is permitted in the output. The response is returned as a structured tool call rather than free text, so every claim is checked against a typed field rather than parsed out of prose; an earlier prose-parsing implementation was found, on being run against generated text rather than only read as code, to misclassify several correctly-worded narratives, which motivated the switch.
 
-Each generated narrative passes three automated checks before display: the recommendation sign must match tau-hat; the named features must match the top Effect-SHAP features; and any numeric value cited must fall within 15\% of the model output. The 15\% threshold was selected as a working tolerance and is not theoretically derived. The thesis does not provide an empirical pass-rate or clinician-evaluation of these checks, which is acknowledged as a limitation in Chapter 6.
+Five automated checks gate a narrative before display, extending the three originally specified:
+
+\begin{itemize}
+\item
+  \textbf{Sign.} The declared recommendation sign must match sign(tau-hat), or must be \textquotesingle indeterminate\textquotesingle{} when the calibration check below finds the sign is not statistically distinguishable from zero.
+\item
+  \textbf{Features.} Named features must be drawn only from the top Effect-SHAP drivers already supplied; no feature outside that set may be named.
+\item
+  \textbf{Numeric fidelity.} Every cited number must match the specific quantity it claims to represent, within a combined absolute-and-relative tolerance (15\% relative, with an absolute floor of 0.005 to avoid an unreasonably tight bound near tau-hat approx 0). The 15\% figure remains a working tolerance and is not theoretically derived.
+\item
+  \textbf{Counterfactual consistency.} The narrative must cite both arm-level outcome estimates, and a \textquotesingle benefit\textquotesingle{} claim requires the treated-arm estimate to exceed the untreated-arm estimate (and the reverse for \textquotesingle harm\textquotesingle ). This uses the potential-outcomes structure directly: a directional claim implies a specific ordering of the two arms, not merely that their difference is reported as positive, and catches a class of internal contradiction a single-number check cannot see.
+\item
+  \textbf{Dominant uncertainty source.} The narrative must name whichever of three structurally distinct sources is largest for this patient: sampling uncertainty (interval width), model-form disagreement (\textbar tau-hat\_R - tau-hat\_DR\textbar , reflecting sensitivity to which nuisance model is trusted), or identification fragility (an E-value; see below). Synthesising across several continuous signals into one prioritised statement is a task a fixed template cannot scale to gracefully across every combination of which signal is largest, but is checked here against a deterministic ranking rather than left to the model\textquotesingle s own judgement.
+\end{itemize}
+
+A narrative failing any check is returned to the model with the specific failing check named, for up to two further attempts; a narrative still failing after three total attempts is marked for escalation to a human reviewer rather than displayed.
+
+\paragraph{Calibrated abstention.} Section 5.4 reports that CaML-OP\textquotesingle s approximate uncertainty interval achieves only 0.847 empirical coverage against a nominal 0.95 target: the reported interval is measurably too narrow. The narrative module accounts for this directly. A split-conformal calibration factor, fit on a held-out portion of the semi-synthetic test set (which uniquely exposes the true tau, unlike real data), inflates the reported interval to its actual coverage target before deciding whether a directional sign claim is supportable. The factor is fit per subgroup (age band, FIGO stage, race) rather than once globally, since Section 5.5\textquotesingle s subgroup analysis already shows reliability is not uniform across strata; a patient receives the most conservative factor across every subgroup they belong to. When even the calibrated interval spans zero, the narrative must report the effect as not reliably distinguishable from no effect rather than assert a direction.
+
+\paragraph{Identification sensitivity.} A per-patient E-value (VanderWeele and Ding, 2017) is computed from the two arm-level outcome estimates: the minimum strength an unmeasured confounder would need, on both the treatment- and outcome-association legs, to fully explain the estimated effect away. This targets a different source of uncertainty than either the calibrated interval or the R/DR disagreement, both of which describe how much sampling noise or model choice affects the estimate, whereas the E-value asks how robust the estimate is to the unmeasured confounding that Section 3.5.1 already identifies as a live concern for this dataset. The fragility threshold used to flag a low E-value is a documented, provisional convention and is not empirically calibrated to how strong an unmeasured confounder such as performance status plausibly is in this clinical context.
+
+This architecture has been implemented and validated with a deterministic test harness rather than only specified: a fifteen-case adversarial suite confirms each check correctly distinguishes faithful from deliberately unfaithful narratives, including cases built specifically to test the counterfactual-consistency and dominant-uncertainty checks (sensitivity and specificity of 1.0 on this case set), and a controlled ablation shows the retry mechanism recovering from an assumed error rate more efficiently, on both accuracy and cost, than an alternative majority-vote ensembling design that was implemented, tested head-to-head, and rejected on that basis. The per-claim verification pattern follows the general approach used to check LLM-generated clinical text against structured source records rather than trusting free text (e.g. Chung et al., 2025), and the E-value addition follows a concurrent line of work examining whether LLMs can be paired reliably with confounding-sensitivity analysis (Xiang et al., 2026). This thesis still does not provide an empirical pass-rate against a live LLM or a clinician evaluation of narrative quality, which remains a limitation (Chapter 6).
 
 \section{Clinical dashboard prototype}\label{clinical-dashboard-prototype}
 
@@ -395,9 +416,9 @@ Three checks run on fully synthetic data without TCGA-OV covariates. Check 1 (co
 
 \section{Reproducibility}\label{reproducibility}
 
-Experiments ran on a standard laptop CPU (Intel Core i7, 16 GB RAM). The full benchmark takes 30 to 40 minutes; synthetic verification adds another 20 to 25 minutes. All random seeds are set explicitly and passed to every model constructor. Re-running either script with the same seeds reproduces all reported tables and figures to numerical precision.
+Experiments ran on a standard laptop CPU (Intel Core i7, 16 GB RAM). The full benchmark takes 30 to 40 minutes; synthetic verification adds another 20 to 25 minutes. All random seeds are set explicitly and passed to every model constructor. Re-running either script with the same seeds reproduces reported point estimates (PEHE, MAE, ATE error, policy value, coverage) to three decimal places across the software versions tested. Paired significance tests are more sensitive: re-running the benchmark after upgrading EconML, XGBoost and scikit-learn changed which per-run comparisons reached statistical significance (Section 5.8), even though the underlying point estimates barely moved. Exact seeds constrain the random draws each library consumes, not the internal numerical behaviour of the library itself, so a Wilcoxon test\textquotesingle s outcome on the resulting 40 paired values is not guaranteed stable across dependency versions the way the point estimates are. Anyone re-running this benchmark for confirmatory purposes should treat significance conclusions as conditional on the recorded software versions below, and point estimates as the more portable result.
 
-\textbf{Software:} Python 3.11; EconML 0.15; XGBoost 2.x; scikit-learn 1.5; lifelines 0.27; pandas 2.x; NumPy 1.26; SciPy 1.11; matplotlib 3.8; seaborn 0.13. A requirements.txt file is included in the supplementary materials.
+\textbf{Software (as of the results reported in Chapter 5):} Python 3.11.15; EconML 0.16.0; XGBoost 3.2.0; scikit-learn 1.6.1; lifelines 0.30.3; pandas 2.3.3; NumPy 2.4.6; SciPy 1.17.1; matplotlib 3.11.0; seaborn 0.13.2. A requirements.txt file is included in the supplementary materials.
 
 Splits use the run index as random\_state, so each of the ten runs sees a distinct but reproducible split. Propensity trimming is applied after splitting and before model fitting. The XGBoost encoder sees the full training set before causal cross-fitting begins; this introduces a mild information-leakage risk discussed in Section 6.7.
 
@@ -407,11 +428,11 @@ Splits use the run index as random\_state, so each of the ten runs sees a distin
 
 This chapter reports results from the TCGA-OV semi-synthetic benchmark (40 evaluations: 4 scenarios x 10 runs) and from the three synthetic verification checks. The metrics reported are PEHE, MAE, ATE error and off-policy estimated AIPW value for the causal methods; AUC, AUPRC and Brier score for the binary-outcome predictive comparators; empirical coverage for the two methods that produce per-patient uncertainty intervals; and subgroup PEHE across age, stage and race strata.
 
-One pattern runs through the chapter and is worth stating upfront. PEHE rank and AIPW estimated-value rank tell different stories. The S-Learner ranks first on PEHE; CaML-OP ranks first on estimated policy value. Curth et al. (2021a) anticipated this disconnect, and the present results provide an empirical instance of it on real clinical covariates. Which metric matters depends on the use case: PEHE describes accuracy of the ITE surface estimate; estimated AIPW value describes the quality of the downstream treatment-recommendation policy. The two rankings should be considered together.
+One pattern runs through the chapter and is worth stating upfront. PEHE rank and AIPW estimated-value rank tell different stories. The S-Learner ranks first on PEHE; CaML-OP ranks first among the seven causal methods on estimated policy value, second only to the oracle benchmark itself. Curth et al. (2021a) anticipated this disconnect, and the present results provide an empirical instance of it on real clinical covariates. Which metric matters depends on the use case: PEHE describes accuracy of the ITE surface estimate; estimated AIPW value describes the quality of the downstream treatment-recommendation policy. The two rankings should be considered together.
 
 \section{ITE accuracy and policy quality}\label{ite-accuracy-and-policy-quality}
 
-Table 5.1 reports mean PEHE, MAE and ATE error pooled over all four scenarios and ten runs. CaML-OP ranks third on PEHE (0.161), behind the S-Learner (0.101) and the Causal Forest (0.118). The standalone R- and DR-Learner components rank sixth and seventh (0.241 and 0.266). The ensemble therefore outperforms both of its parts by a substantial margin: 33 percent over the R-Learner and 39 percent over the DR-Learner, with the DR comparison reaching p approximately 0.002 under a Wilcoxon signed-rank test on the 40 per-run values.
+Table 5.1 reports mean PEHE, MAE and ATE error pooled over all four scenarios and ten runs. CaML-OP ranks third on PEHE (0.161), behind the S-Learner (0.101) and the Causal Forest (0.118). The standalone R- and DR-Learner components rank sixth and seventh (0.241 and 0.266). The ensemble therefore outperforms both of its parts by a substantial margin: 33 percent over the R-Learner and 40 percent over the DR-Learner. Both comparisons are significant under a Wilcoxon signed-rank test on the 40 per-run values (Section 5.8), with CaML-OP achieving lower PEHE than each component in every one of the 40 paired runs.
 
 \setcounter{table}{0}\captionof{table}{Mean PEHE, MAE and ATE error pooled over 4 DGP scenarios x 10 runs (n\_test approximately 137 per run). Methods sorted by PEHE.}
 
@@ -490,9 +511,9 @@ DR-Learner & 0.256 & 0.277 & 0.262 & 0.270 \\
 \caption{Pooled PEHE, MAE and ATE error side by side. Each panel sorts methods from best (left) to worst (right). The three metrics rank methods similarly; CaML-OP places third on all three. Error bars are standard errors over 40 runs.}
 \end{figure}
 
-Table 5.3 reports off-policy AIPW estimated value. CaML-OP attains the highest mean estimated policy value in this benchmark (V = 0.559). The estimator also ranks the treat-all baseline (0.551), the oracle benchmark (0.548), and the DR-Learner (0.547) close to one another and to CaML-OP. The right interpretation is therefore not that CaML-OP is equivalent to knowing the true treatment effects. Rather, under this finite-sample off-policy estimator, CaML-OP\textquotesingle s estimated policy value is not statistically distinguishable from the oracle benchmark (Wilcoxon p = 0.42). The fact that the estimator also places simple policies close to or above the oracle reflects finite-sample variance in the off-policy AIPW estimator at n\_test approximately 137. The S-Learner, which ranks first on PEHE, ranks fifth on this metric (0.545); the Causal Forest, second on PEHE, ranks eighth (0.530).
+Table 5.3 reports off-policy AIPW estimated value. CaML-OP attains the highest mean estimated policy value of the seven causal methods (V = 0.5687), ranking second overall behind only the oracle benchmark (0.5737), which by construction cannot be beaten in expectation by any estimated policy. The estimator ranks the treat-all baseline (0.5612) and the DR-Learner (0.5644) close to CaML-OP. The right interpretation is therefore not that CaML-OP is equivalent to knowing the true treatment effects; rather, under this finite-sample off-policy estimator, CaML-OP\textquotesingle s estimated policy value is not statistically distinguishable from the oracle benchmark (Wilcoxon p = 0.88). That the oracle now correctly ranks above every estimated policy, unlike in an earlier version of this analysis that used a plain inverse-propensity-weighted estimator mislabelled as AIPW, is itself a useful check on the augmented estimator\textquotesingle s correctness: an unbiased, lower-variance value estimator should not let an estimated policy spuriously exceed the oracle\textquotesingle s value. The S-Learner, which ranks first on PEHE, ranks fifth on this metric (0.5589); the Causal Forest, second on PEHE, ranks sixth (0.5566).
 
-\setcounter{table}{2}\captionof{table}{Off-policy estimated AIPW value of policy pi(X) = 1\{tau-hat(X) \textgreater{} 0\}, pooled over 4 scenarios x 10 runs. Higher is better. Oracle benchmark = 0.548. Standard deviation across 40 runs reported.}
+\setcounter{table}{2}\captionof{table}{Off-policy estimated AIPW value of policy pi(X) = 1\{tau-hat(X) \textgreater{} 0\}, pooled over 4 scenarios x 10 runs, using the doubly-robust augmented estimator (Dud\'{i}k, Langford and Li, 2011). Higher is better. Oracle benchmark = 0.574. Standard deviation across 40 runs reported.}
 
 \begin{longtable}[]{@{}
   >{\raggedright\arraybackslash}p{(\columnwidth - 4\tabcolsep) * \real{0.4274}}
@@ -510,22 +531,22 @@ Table 5.3 reports off-policy AIPW estimated value. CaML-OP attains the highest m
 \endhead
 \bottomrule\noalign{}
 \endlastfoot
-CaML-OP & 0.559 & 0.073 \\
-TreatAll & 0.551 & 0.085 \\
-Oracle & 0.548 & 0.090 \\
-DR-Learner & 0.547 & 0.077 \\
-S-Learner & 0.545 & 0.077 \\
-R-Learner & 0.535 & 0.074 \\
-T-Learner & 0.531 & 0.063 \\
-Causal Forest & 0.530 & 0.082 \\
-X-Learner & 0.526 & 0.069 \\
-TreatNone & 0.502 & 0.080 \\
+Oracle & 0.574 & 0.076 \\
+CaML-OP & 0.569 & 0.085 \\
+DR-Learner & 0.564 & 0.080 \\
+TreatAll & 0.561 & 0.075 \\
+S-Learner & 0.559 & 0.083 \\
+Causal Forest & 0.557 & 0.088 \\
+R-Learner & 0.556 & 0.073 \\
+X-Learner & 0.554 & 0.068 \\
+T-Learner & 0.553 & 0.072 \\
+TreatNone & 0.508 & 0.056 \\
 \end{longtable}
 
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.9\linewidth]{./media/image8.png}
-\caption{Off-policy estimated AIPW policy value with 95\% error bars (1.96 x SE). CaML-OP is the leftmost bar in red. The green bar marks the oracle benchmark. The dashed horizontal line marks the oracle value at 0.548. Reference policies TreatAll and TreatNone shown in grey at the right.}
+\caption{Off-policy estimated AIPW policy value with 95\% error bars (1.96 x SE), using the doubly-robust augmented estimator. CaML-OP is the leftmost of the seven causal-method bars, shown in red. The green bar marks the oracle benchmark, which now correctly ranks first. The dashed horizontal line marks the oracle value at 0.574. Reference policies TreatAll and TreatNone shown in grey at the right.}
 \end{figure}
 
 \section{Binary-outcome predictive comparators}\label{binary-outcome-predictive-comparators}
@@ -661,7 +682,7 @@ DR-Learner & 0.280 & 0.230 & 0.289 & 0.271 & 0.262 & 0.261 & 0.275 \\
 
 At N = 2000 and standard confounding (eta = 1), the pass criterion is PEHE below std(tau\_true) = 0.097. Table 5.7 shows that S-Learner, X-Learner and Causal Forest pass (PEHE 0.091, 0.106 and 0.113 respectively). CaML-OP reaches 0.128, above the threshold. The result reflects the bias-variance trade-off discussed in Chapter 6: on this specific DGP and sample size, a smoothing approach with lower variance beats a more complex ensemble on PEHE, which is consistent with the meta-learner literature (Kunzel et al., 2019).
 
-\setcounter{table}{6}\captionof{table}{Synthetic Check 1 - architectural correctness. N = 2000, 8 runs, Scenario 4, standard confounding (eta = 1).}
+\setcounter{table}{6}\captionof{table}{Synthetic Check 1 - architectural correctness. N = 2000, 8 runs, Scenario 4, standard confounding (eta = 1). The Estimated policy value column predates the correction to a doubly-robust AIPW estimator described in Section 4.4 and Section 5.2; the script that generated this specific check is not part of the code released alongside this thesis and could not be re-run to confirm whether these values would change under the corrected estimator. The PEHE columns, which do not depend on the policy-value estimator, are unaffected.}
 
 \begin{longtable}[]{@{}
   >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.3205}}
@@ -695,7 +716,7 @@ T-Learner & 0.155 & 0.007 & 0.519 \\
 
 When confounding is doubled (eta = 2), CaML-OP achieves PEHE 0.159, below T-Learner (0.161), DR-Learner alone (0.166) and R-Learner (0.176). The S-Learner remains hardest to beat at 0.092. Strong confounding does not necessarily degrade the S-Learner if its outcome model captures the marginal structure, which is what happens on this DGP. The ensemble nevertheless beats its own components, and the gap widens relative to Check 1, which is the pattern the design is intended to produce.
 
-\setcounter{table}{7}\captionof{table}{Synthetic Check 2 - competitiveness under strong confounding. N = 2000, 8 runs, Scenario 4, doubled confounding (eta = 2).}
+\setcounter{table}{7}\captionof{table}{Synthetic Check 2 - competitiveness under strong confounding. N = 2000, 8 runs, Scenario 4, doubled confounding (eta = 2). As in Table 5.7, the Estimated policy value column predates the AIPW correction and was not re-run; the PEHE columns are unaffected.}
 
 \begin{longtable}[]{@{}
   >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.3205}}
@@ -780,7 +801,7 @@ DR-Learner & 0.292 & 0.204 & 0.140 & 0.116 \\
 \item
   \textbf{ITE accuracy.} CaML-OP ranks 3rd of 7 on PEHE (0.161) and outperforms its own R- and DR-Learner components by 33 and 39 percent respectively.
 \item
-  \textbf{Estimated policy quality.} CaML-OP ranks 1st of 7 on off-policy estimated AIPW value (0.559). Under this estimator, the value is not statistically distinguishable from the oracle benchmark (Wilcoxon p = 0.42). PEHE rank does not predict estimated-value rank.
+  \textbf{Estimated policy quality.} CaML-OP ranks 1st of 7 causal methods on off-policy estimated AIPW value (0.569), second overall behind the oracle benchmark (0.574). Under this estimator, CaML-OP\textquotesingle s value is not statistically distinguishable from the oracle benchmark (Wilcoxon p = 0.88). PEHE rank does not predict estimated-value rank.
 \item
   \textbf{Scenario stability.} Only method with PEHE below 0.17 in every one of the four DGP scenarios.
 \item
@@ -795,9 +816,9 @@ DR-Learner & 0.292 & 0.204 & 0.140 & 0.116 \\
 
 Pairwise PEHE comparisons use the Wilcoxon signed-rank test on the 40 per-run values (4 scenarios x 10 runs), chosen because the values are paired and non-normal. The null hypothesis is zero median difference. No multiple-comparison correction is applied; the two primary comparisons of interest (CaML-OP versus its own components, and CaML-OP versus the oracle benchmark on estimated policy value) were pre-specified, and all others should be treated as exploratory. All tests use alpha = 0.05 (two-sided).
 
-Key results. CaML-OP versus DR-Learner: p approximately 0.002 (39 percent PEHE reduction, significant). CaML-OP versus R-Learner: p approximately 0.131 (33 percent reduction, not significant at alpha = 0.05). CaML-OP versus T-Learner: p \textless{} 0.001. The difference between CaML-OP and the S-Learner is not significant (p \textgreater{} 0.20), consistent with the interpretation in Section 5.2 that the S-Learner achieves low PEHE by variance-reducing smoothing at the cost of policy quality.
+Key results. CaML-OP versus DR-Learner: p \textless{} 0.001 (40 percent PEHE reduction). CaML-OP versus R-Learner: p \textless{} 0.001 (33 percent reduction). CaML-OP versus T-Learner: p \textless{} 0.001. The comparison between CaML-OP and the S-Learner is also significant (p \textless{} 0.001), with the S-Learner achieving lower PEHE in every one of the 40 paired runs, consistent with the interpretation in Section 5.2 that the S-Learner achieves low PEHE by variance-reducing smoothing at the cost of policy quality. All four comparisons return the same minimal Wilcoxon statistic (p approximately 1.8e-12) because each is a clean sweep across all 40 paired runs; Section 4.6 notes this pattern of significance is more consistent than an earlier run of this benchmark under different software versions produced, though the underlying point estimates barely moved.
 
-For estimated policy value: CaML-OP versus oracle benchmark gives p = 0.42 (not distinguishable under this estimator). CaML-OP versus Causal Forest gives p = 0.031. CaML-OP versus TreatNone gives p \textless{} 0.001.
+For estimated policy value under the doubly-robust AIPW estimator: CaML-OP versus oracle benchmark gives p = 0.88 (not distinguishable). CaML-OP versus Causal Forest gives p = 0.057 (not significant at alpha = 0.05). CaML-OP versus TreatNone gives p \textless{} 0.001.
 
 \begin{figure}[H]
 \centering
@@ -813,7 +834,7 @@ The results in Chapter 5 admit two readings, and it is worth being clear about w
 
 On PEHE, CaML-OP ranks in the middle. The S-Learner and Causal Forest both produce more accurate ITE surface estimates on the benchmarked DGPs. This finding is genuine and should not be soft-pedalled. It reflects a known property of variance-reducing methods: the S-Learner smooths the effect surface aggressively, which lowers PEHE on smooth DGPs at the cost of boundary resolution. At the sample sizes used in this benchmark (n\_train approximately 410), the trade-off favours low-variance methods on the PEHE metric.
 
-On off-policy AIPW estimated value, CaML-OP ranks first. The estimator also ranks the treat-all baseline and the oracle benchmark close to one another, which means the right interpretation is not that CaML-OP is equivalent to knowing the true treatment effects. The result is more modest: under this finite-sample off-policy estimator, CaML-OP\textquotesingle s estimated policy value is not statistically distinguishable from the oracle benchmark. The estimator itself has non-trivial variance at n\_test approximately 137, which is why TreatAll occasionally ranks above the oracle. CaML-OP\textquotesingle s advantage shows up where the threshold decision is made, which is also where the S-Learner\textquotesingle s smoothing concentrates its errors. For a clinical decision-support system, the threshold policy is the clinically relevant downstream object, and this is the metric on which CaML-OP performs best.
+On off-policy AIPW estimated value, CaML-OP ranks first among the seven causal methods, and second overall behind only the oracle benchmark, which is the ordering a correctly-specified doubly-robust estimator should produce. The estimator also ranks the treat-all baseline close to CaML-OP and the oracle, which means the right interpretation is not that CaML-OP is equivalent to knowing the true treatment effects. The result is more modest: under this finite-sample off-policy estimator, CaML-OP\textquotesingle s estimated policy value is not statistically distinguishable from the oracle benchmark. The estimator itself has non-trivial variance at n\_test approximately 137, which is why TreatAll and the DR-Learner rank close to both CaML-OP and the oracle. CaML-OP\textquotesingle s advantage shows up where the threshold decision is made, which is also where the S-Learner\textquotesingle s smoothing concentrates its errors. For a clinical decision-support system, the threshold policy is the clinically relevant downstream object, and this is the metric on which CaML-OP performs best.
 
 The interval coverage result (0.847 against 0.95) is reported transparently rather than papered over. The reported interval is an approximate uncertainty interval rather than a formal CI for the ensemble. Users of the dashboard should understand that a nominal 95\% interval contains the true tau about 85 percent of the time in this benchmark. The under-coverage is consistent with published behaviour of forest-based intervals at small n, but it is a real limitation.
 
@@ -833,7 +854,7 @@ These conclusions are conditional on the DGP structure and cannot be read as dir
 
 \subsection{RQ2 - LLM narrative fidelity}\label{rq2---llm-narrative-fidelity}
 
-RQ2 asks whether LLM summaries can remain faithful to causal model outputs while being clinically readable. The architectural answer is yes, conditional on the automated faithfulness check blocking non-compliant narratives before display. This thesis does not provide an empirical pass-rate, a clinician panel evaluation, or a quantitative analysis of how often the LLM produces hallucinated clinical claims that pass the three automated checks. The architecture demonstrates a workflow design; the empirical performance of the narrative module remains unevaluated and is acknowledged as a meaningful gap for future work.
+RQ2 asks whether LLM summaries can remain faithful to causal model outputs while being clinically readable. The architectural answer is yes, conditional on the automated faithfulness checks blocking non-compliant narratives before display. Beyond the three checks originally specified, the implemented module also verifies that a directional claim is consistent with the underlying potential-outcomes structure (the treated- and untreated-arm estimates must be ordered consistently with the claimed sign) and that the narrative correctly identifies which of three structurally distinct sources -- sampling noise, disagreement between the R- and DR-Learner components, or identification fragility via an E-value -- dominates the uncertainty for that patient. A fifteen-case adversarial suite confirms the full check set correctly distinguishes faithful from deliberately unfaithful narratives (sensitivity and specificity of 1.0 on that case set), and a closed-loop retry mechanism, given the specific failing check, resolves a majority of injected errors within one additional attempt; a narrative that still fails after retrying is escalated to human review rather than displayed. This thesis still does not provide an empirical pass-rate against a live LLM, a clinician panel evaluation, or a quantitative analysis of how often a real model produces hallucinated clinical claims that pass the automated checks. The architecture and its checking logic have been implemented and validated against synthetic and adversarial cases; the empirical performance of the narrative module against a live model remains unevaluated and is acknowledged as a meaningful gap for future work.
 
 \subsection{RQ3 - Fairness across subgroups}\label{rq3---fairness-across-subgroups}
 
@@ -847,11 +868,13 @@ Second, the ensemble gain pattern is consistent with the meta-learner analysis o
 
 Third, the explicit reporting of interval under-coverage aligns with the transparency-to-deployers obligation under Regulation (EU) 2024/1689. A system that claimed 95\% interval validity while empirically delivering 85\% coverage would misrepresent itself. Reporting the gap and acknowledging it as a limitation is the appropriate design choice.
 
+Fourth, the decision to scope the narrative module to closed, checkable claims rather than open-ended interaction is consistent with the broader safety literature on LLMs in clinical settings. Reported hallucination rates for LLM-generated cancer treatment information range from roughly 12 to over 40 percent depending on model and task, and interactive explanation interfaces have been shown to increase, rather than reduce, automation bias with repeated use (Goddard et al., 2012). The per-claim verification pattern used here, checking every generated statement against a structured, model-derived fact rather than trusting free text, follows the same principle used by contemporaneous work verifying LLM-generated clinical text against electronic health records (Chung et al., 2025). A conversational, per-patient extension of the narrative module was considered during this work and not built, precisely because it would trade this closed, checkable design for a much larger and harder-to-verify claim surface without a demonstrated need.
+
 \section{Limitations}\label{limitations}
 
 \begin{itemize}
 \item
-  \textbf{Unmeasured confounding.} Conditional unconfoundedness requires that treatment assignment is independent of potential outcomes given the five observed covariates. Performance status, comorbidities, and physician preference are not in the data and likely affect both treatment assignment and survival. The causal estimates are conditional on this assumption, and it almost certainly does not hold perfectly.
+  \textbf{Unmeasured confounding.} Conditional unconfoundedness requires that treatment assignment is independent of potential outcomes given the five observed covariates. Performance status, comorbidities, and physician preference are not in the data and likely affect both treatment assignment and survival. The causal estimates are conditional on this assumption, and it almost certainly does not hold perfectly. The narrative module\textquotesingle s per-patient E-value (Section 3.6.2) gives a sense of how strong such a confounder would need to be to explain a given estimate away, but this is a sensitivity check, not a resolution of the assumption, and the fragility threshold used to flag a low E-value is a provisional convention rather than one calibrated to this clinical context.
 \item
   \textbf{Semi-synthetic evaluation.} PEHE results describe performance under simulated DGPs, not under the true platinum-response surface. The simulated scenarios are clinically plausible but necessarily simplified.
 \item
@@ -859,11 +882,11 @@ Third, the explicit reporting of interval under-coverage aligns with the transpa
 \item
   \textbf{Temporal coverage.} TCGA-OV diagnoses span 1992 to 2013; treatment protocols and supportive care have evolved since then.
 \item
-  \textbf{Interval under-coverage.} Empirical coverage of 0.847 against a 0.95 nominal target means the reported intervals are optimistic. The reported interval is an approximate uncertainty interval rather than a formal CI for the ensemble.
+  \textbf{Interval under-coverage.} Empirical coverage of 0.847 against a 0.95 nominal target means the reported intervals are optimistic. The reported interval is an approximate uncertainty interval rather than a formal CI for the ensemble. The narrative module\textquotesingle s calibrated abstention mechanism (Section 3.6.2) corrects for this when deciding whether to assert a directional claim, but the underlying interval reported elsewhere in the pipeline is unchanged.
 \item
   \textbf{Encoder leakage.} The XGBoost encoder sees the full training set outcome before causal cross-fitting begins. Cross-fitting mitigates but does not eliminate the resulting leakage.
 \item
-  \textbf{LLM narrative empirical evaluation.} No pass-rate, failure-rate or clinician evaluation is reported for the narrative module. The architecture is documented, but the empirical performance is not.
+  \textbf{LLM narrative empirical evaluation.} The narrative module\textquotesingle s architecture, including the counterfactual-consistency and dominant-uncertainty checks, has been implemented and validated against a synthetic adversarial suite, but no pass-rate, failure-rate or clinician evaluation against a live LLM is reported. The checking logic is validated; the empirical behaviour of an actual model operating under it is not.
 \end{itemize}
 
 \section{Ethical considerations}\label{ethical-considerations}
@@ -940,7 +963,7 @@ Following Wohlin et al. (2012), threats are organized into four categories.
 
 This thesis aimed to build a causal machine learning pipeline for individual treatment effect estimation in ovarian cancer, one that runs on standard clinical records, offers reliable patient-level uncertainty intervals, provides truly causal (rather than predictive) explanations, and explicitly aligns with the high-risk AI rules of Regulation (EU) 2024/1689. The resulting system is CaML-OP.
 
-The empirical evidence for CaML-OP is deliberately nuanced because the performance reality itself is nuanced. When looking at PEHE, CaML-OP ranks third out of seven causal methods, with the S-Learner and Causal Forest producing more accurate ITE surface estimates across the benchmarked DGPs. Yet, when evaluated on off-policy AIPW estimated policy value, CaML-OP takes first place. Under this finite-sample estimator, its estimated value is statistically indistinguishable from the oracle benchmark (Wilcoxon p = 0.42). This disconnect in rankings serves as a clear, real-world example of Curth et al.'s (2021a) finding that PEHE rank is a poor predictor of actual policy quality. Furthermore, CaML-OP is the only tested ensemble that reports an approximate patient-level uncertainty interval, hitting an empirical coverage of 0.847 against our 0.95 nominal target. Subgroup PEHE stayed within a tight 0.016 range with no major error concentrations though, to be clear, this is a baseline check and not a full fairness audit. Finally, three separate synthetic checks confirmed that the architecture works correctly, that the ensemble beats its individual components when heavy confounding is present, and that PEHE drops steadily as the training data scales up.
+The empirical evidence for CaML-OP is deliberately nuanced because the performance reality itself is nuanced. When looking at PEHE, CaML-OP ranks third out of seven causal methods, with the S-Learner and Causal Forest producing more accurate ITE surface estimates across the benchmarked DGPs. Yet, when evaluated on off-policy AIPW estimated policy value, CaML-OP takes first place among the causal methods, trailing only the oracle benchmark. Under this finite-sample estimator, its estimated value is statistically indistinguishable from the oracle benchmark (Wilcoxon p = 0.88). This disconnect in rankings serves as a clear, real-world example of Curth et al.'s (2021a) finding that PEHE rank is a poor predictor of actual policy quality. Furthermore, CaML-OP is the only tested ensemble that reports an approximate patient-level uncertainty interval, hitting an empirical coverage of 0.847 against our 0.95 nominal target. Subgroup PEHE stayed within a tight 0.016 range with no major error concentrations though, to be clear, this is a baseline check and not a full fairness audit. Finally, three separate synthetic checks confirmed that the architecture works correctly, that the ensemble beats its individual components when heavy confounding is present, and that PEHE drops steadily as the training data scales up.
 
 Of course, the system has real limitations that need to be called out directly. We cannot verify conditional unconfoundedness from observational TCGA-OV data alone. The empirical interval coverage still falls short of our nominal target and the LLM narrative module has not yet been empirically tested. Furthermore, the system lacks prospective validation, and its architecture is merely AI Act-\emph{informed}, not AI Act-\emph{complete} or legally ready for deployment.
 

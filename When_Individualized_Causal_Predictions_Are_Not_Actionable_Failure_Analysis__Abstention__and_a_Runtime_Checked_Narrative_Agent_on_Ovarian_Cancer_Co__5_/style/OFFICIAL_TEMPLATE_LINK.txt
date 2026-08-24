@@ -1,0 +1,14 @@
+Workshop formatting file supplied by the authors:
+https://drive.google.com/file/d/1YM_VG1bk6mokRHFwC69Z_nJnAJFvbHu0/view
+
+Official NeurIPS 2026 formatting template reference:
+https://www.overleaf.com/latex/templates/formatting-instructions-for-neurips-2026/bjdwqfdkyftc
+
+Required style filename in the project root:
+neurips_2026.sty
+
+For the anonymous workshop submission main.tex must use:
+\usepackage[dblblindworkshop]{neurips_2026}
+
+Do not add final or preprint before acceptance.
+Do not modify neurips_2026.sty.

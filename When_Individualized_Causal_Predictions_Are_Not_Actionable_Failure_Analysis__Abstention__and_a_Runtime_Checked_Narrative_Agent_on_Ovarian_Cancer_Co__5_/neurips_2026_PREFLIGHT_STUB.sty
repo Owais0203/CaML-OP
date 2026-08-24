@@ -1,0 +1,46 @@
+% =====================================================================
+%  PREFLIGHT STUB — NOT THE OFFICIAL STYLE FILE. DO NOT SUBMIT WITH THIS.
+% =====================================================================
+%
+%  This is a minimal stand-in that lets main.tex compile locally so you can
+%  proof-read content, check for undefined citations/references, and see the
+%  tables and figures. It is NOT the ICBINB-BIO workshop style.
+%
+%  It does NOT reproduce: line numbers, the official title block, Times type,
+%  10/11 leading, the checklist environment, or the exact page geometry.
+%  PAGINATION FROM THIS FILE IS MEANINGLESS. Do not use it to judge whether
+%  the paper fits the page limit, and do not build the upload PDF with it.
+%
+%  Replace this file with the workshop's own neurips_2026.sty before the
+%  final compile. See style/OFFICIAL_TEMPLATE_LINK.txt.
+% =====================================================================
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{neurips_2026}[2026/01/01 LOCAL PREFLIGHT STUB - NOT OFFICIAL]
+
+\DeclareOption{dblblindworkshop}{}
+\DeclareOption{workshop}{}
+\DeclareOption{main}{}
+\DeclareOption{position}{}
+\DeclareOption{final}{}
+\DeclareOption{preprint}{}
+\DeclareOption{nonatbib}{}
+\DeclareOption*{}
+\ProcessOptions\relax
+
+% Approximate NeurIPS text block: 5.5in x 9in on US Letter.
+\RequirePackage{geometry}
+\geometry{letterpaper,left=1.5in,right=1.5in,top=1.0in,bottom=1.0in}
+
+% microtype font expansion needs scalable fonts; disable it for the stub.
+\PassOptionsToPackage{expansion=false}{microtype}
+
+\RequirePackage{natbib}
+
+% Workshop-only macro. The stock NeurIPS 2026 style does NOT define this.
+\newcommand{\workshoptitle}[1]{\gdef\stubworkshoptitle{#1}}
+\gdef\stubworkshoptitle{}
+
+% Stub of the acknowledgements environment used by the official style.
+\newenvironment{ack}{\section*{Acknowledgments}}{}
+
+\endinput

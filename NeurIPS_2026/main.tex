@@ -1,0 +1,221 @@
+\documentclass{article}
+
+\usepackage[dblblindworkshop]{neurips_2026}
+\workshoptitle{I Can't Believe It's Not Better: Failure Modes of AI in Biology}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsfonts}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{nicefrac}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{float}
+\providecommand{\tightlist}{\setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+
+\title{When Individualized Causal Predictions Are Not Actionable:\\ Failure Analysis, Abstention and a Runtime-Checked Narrative Agent on Ovarian-Cancer Covariates}
+
+\author{Anonymous Authors}
+
+\begin{document}
+
+\maketitle
+\begin{abstract}
+Clinical treatment-effect models can return individualized scores even when the available data do not support a stable treatment direction. We study this failure mode in a semi-synthetic benchmark using 425 analyzed TCGA-OV covariate profiles, retained from 547 extracted records after missing-value filtering, where treatment assignment and potential outcomes are simulated so that conditional average treatment effect (CATE) ground truth is known for evaluation. We compare six standard CATE estimators with three matched variants of the CaML-OP estimator, an equal-weight ensemble of NonParamDML and ForestDRLearner fitted on supervised XGBoost leaf-augmented covariates. With a $K=5$ cross-fitted leaf encoder and four pre-treatment fields, CaML-OP ranks second in PEHE (0.0972) behind an S-Learner (0.0911); the paired difference of $+$0.0061 has a 95\% bootstrap interval spanning zero, while MAE and absolute ATE error favor the S-Learner. Its effect-sign accuracy is highest at 0.5988, yet the values cluster tightly across the methods range 0.5517-0.5988. The representation benefit is strongly protocol-dependent: the out-of-fold encoder cuts PEHE by 47.4\% against raw covariates where the leaky encoder shows 7.4\%. An oracle split-conformal study using known simulated CATE for calibration attains its nominal coverage at all four targets, but abstention reaches 0.994 at the 0.95 target, where the mean width is 0.613. CaML-OP propagates this uncertainty into a constrained generator--verifier narrative agent, evaluated with live language models on 160 synthetic structured evaluation states (Appendix~A). Free text from the larger backend asserts a direction on 0.176 of abstention states under a lenient rubric and 0.471 under a strict one; typed tool-call output yields an observed unsupported-direction rate of 0.000, and two targeted retries raise the verified pass rate from 0.450 to 0.781 with 21.9\% escalation on the larger backend and from 0.194 to 1.000 on the smaller. Individualized scores can therefore be computed, improved, and calibrated while remaining unsupported for directional action.
+\end{abstract}
+
+\section{Introduction}
+Heterogeneous treatment-effect estimation aims to move from population-average effects toward treatment decisions that depend on observed patient characteristics. The statistical target is usually a conditional mean contrast rather than an observed person-specific counterfactual. We therefore use the conditional average treatment effect (CATE),
+\[
+\tau(x)=\mathbb{E}[Y(1)-Y(0)\mid X=x],
+\]
+under the potential-outcomes framework \citep{imbens2015}. The fitted value $\hat\tau(x)$ is interpreted as an individualized treatment-effect score. It is not an identified realization of $Y(1)-Y(0)$ for a particular patient.
+
+The empirical substrate is TCGA-OV \citep{tcga2011}. We preserve the covariate distribution but simulate treatment assignment and potential outcomes, making PEHE and sign recovery observable. This construction does not establish the causal effect of platinum therapy in the TCGA cohort.
+
+CaML-OP tests a hypothesis that is plausible in small observational datasets: prognostic structure learned from the outcome may provide useful nonlinear features for CATE estimation, and combining estimators with different orthogonalized constructions may reduce dependence on one learner. The results separate its two halves. The representation half survives: an out-of-fold supervised leaf encoder reduces error substantially relative to raw covariates in every data-generating process. The decision-relevant half does not. A simple S-Learner still attains the lowest PEHE, MAE, and ATE error; the PEHE gap to the improved ensemble is small and its 95\% bootstrap interval includes zero. Effect-sign accuracy ranges from 0.5517 to 0.5988 across methods, and the oracle split-conformal procedure reaches nominal coverage only by producing intervals that send almost every case into abstention.
+
+The second part of CaML-OP addresses what happens after such a failure is detected. Interval status is converted into an abstention state passed to a constrained narrative agent; in this benchmark that status is available because calibration uses known simulated $\tau(x)$. The agent returns a typed tool call rather than unconstrained prose, and its output is released only after deterministic checks verify consistency with the model state. The paper therefore studies both a failure regime in individualized CATE estimation and a system design that prevents the communication layer from turning an unsupported direction into a confident narrative.
+
+\paragraph{Contributions.}
+\begin{enumerate}
+\item We document a failure regime for individualized CATE estimation on real ovarian-cancer covariates with semi-synthetic causal outcomes: the proposed ensemble does not outperform the S-Learner on PEHE, MAE, or ATE error, although it attains the highest effect-sign accuracy. Across all nine methods, sign accuracy ranges from 0.5517 to 0.5988, while the cross-fitted encoder cuts PEHE by 47.4\% relative to raw covariates.
+\item We connect uncertainty to system behavior through abstention with a repeated split-conformal study on known semi-synthetic CATE, and report the cost of calibration in abstention rate and interval width rather than in coverage alone. The calibration factor is evaluation-only, not a transferable clinical guarantee.
+\item We implement and evaluate a generator--verifier narrative agent with live language models across four conditions, using typed output, five deterministic consistency checks, targeted retry, and an explicit escalation state. Clinical validity remains a separate question.
+\end{enumerate}
+
+\section{Data, estimand, and evaluation}
+\subsection{TCGA-OV covariates and semi-synthetic outcomes}
+The extracted TCGA-OV table contains 547 records. After dropping rows with missing analysis fields, 425 records remain and are used for all reported analyses. TCGA-OV is used here only as a source of low-dimensional tabular clinical covariates; no genomic or molecular measurements are used. The primary analysis uses four pre-treatment fields: age at diagnosis, FIGO stage, race, and ethnicity. Race and ethnicity are included only as observed covariates in this methodological benchmark and are not interpreted as biological causal attributes. FIGO stage is retained as ordinal because the implementation preserves the clinical stage order. The field \texttt{treatment\_intent\_type} used in an earlier configuration is excluded: it originates from treatment metadata rather than a guaranteed pre-treatment baseline measurement.
+
+Four data-generating processes preserve the empirical $X$ distribution while varying a latent logit-scale treatment shift $\delta(x)$ across constant, linear, nonlinear, and interaction forms (Appendix~A.2). Potential outcomes are then simulated, and the probability-scale ground-truth CATE used for evaluation is $\tau_{\mathrm{true}}(x)=p_1(x)-p_0(x)$. Treatment assignment is generated from a logistic function of standardized age and stage; this is a benchmark construction, not a reconstruction of TCGA treatment allocation. Each scenario is evaluated over 10 seeds with a stratified 75/25 train--test split, yielding approximately 318 training and 107 test observations per run. At the baseline setting, propensity scores span 0.164--0.872, so trimming the training fold at 0.05--0.95 removes no observations: the benchmark studies confounding under comfortable overlap rather than severe positivity violations.
+
+\subsection{Baselines and metrics}
+The comparison includes S-, T-, and X-Learners \citep{kunzel2019}, a causal-forest baseline in the tradition of \citet{wager2018}, NonParamDML (residualized nuisance estimation in the double-machine-learning/R-learner family, \citealp{chernozhukov2018,nie2021}), and DRLearner, a doubly robust estimator using the pseudo-outcome construction of \citet{kennedy2023}; settings are in Appendix~A.5. The CaML-OP estimator is evaluated in three variants on identical splits and seeds: (A) raw covariates, (B) the leaky leaf representation, and (C) the cross-fitted representation used as the primary result. Semi-synthetic benchmarks are useful because the effect surface is observed by construction, but rankings can depend on the chosen DGP and inductive bias \citep{curth2021}; that dependence is part of the failure analysis rather than a nuisance to be hidden.
+
+We report PEHE, mean absolute effect error, absolute ATE error, effect-sign accuracy where the simulated surface contains both signs, and empirical coverage, summarizing method differences with paired 95\% bootstrap intervals over the $4\times10=40$ (DGP, seed) pairs. Off-policy values do not support the main conclusions, because the evaluated sign policy does not match the system's abstention-aware behavior.
+
+\section{CaML-OP}
+
+CaML-OP denotes the complete estimation-to-communication pipeline, comprising a CATE estimation layer, an uncertainty/abstention layer, and a runtime-checked narrative communication layer. We refer specifically to the CATE model as the CaML-OP estimator.
+
+\subsection{Representation and CATE ensemble}
+A gradient-boosted classifier is fit to the binary outcome and each tree's leaf assignment is one-hot encoded; these indicators are concatenated with the original covariates to form a supervised basis expansion using XGBoost \citep{chen2016}. NonParamDML and ForestDRLearner are then fit on the augmented design and their point CATE predictions averaged with equal weight.
+
+The leaf encoder is cross-fitted to be out-of-fold with respect to the estimation stage: for each of $K=5$ folds it is fit on the remaining folds and transforms the held-out fold, and the held-out blocks are concatenated into the training representation. Because independently fitted forests do not share leaf numbering, leaf columns are keyed by tree index and split path, not leaf ID, giving one shared column dictionary across folds; unseen observations are encoded by all five fold-encoders and averaged, so training and evaluation share a feature space (Appendix~A.4). No calibration or evaluation outcome enters the representation. Variant B retains the earlier protocol, in which the encoder sees training outcomes before the causal estimators perform their internal cross-fitting, and is reported only as a leakage comparison.
+
+\subsection{Split-conformal interval and abstention}
+The equal-weight ensemble has no native confidence interval. CaML-OP forms an uncalibrated one by taking the ForestDRLearner width, re-centering it on the ensemble point estimate, and multiplying the half-width by 1.10. This heuristic half-width $h$ is then calibrated by a split-conformal procedure rather than used as a nominal 95\% interval.
+
+Each repetition partitions the observations into model-training, calibration, and evaluation sets before any fitting, so the whole pipeline is fit on model-training data alone. On the calibration set we compute scores $s_i=|\tau_i-\hat\tau_i|/\max(h_i,\epsilon)$ and take the $k$-th order statistic, $k=\lceil (n+1)(1-\alpha)\rceil$ clipped to $[1,n]$ (Appendix~A.7). The threshold is frozen; coverage, width and abstention are measured only on the evaluation set. If the calibrated interval around $\hat\tau(x)$ spans zero, the system abstains. This interval exists only inside the benchmark, as the conformal threshold uses known simulated $\tau(x)$.
+
+This is a semi-synthetic, oracle split-conformal study: the scores use known $\tau(x)$, unobservable for real patients, so the threshold is not transferable to a clinical deployment. Conformal approaches to counterfactual and treatment-effect uncertainty require explicit causal assumptions and treatment of the missing-counterfactual problem \citep{lei2020}. We make no subgroup-conditional coverage claim, because no method carrying that guarantee is implemented here.
+
+\subsection{Effect-function attribution and hidden-confounding diagnostic}
+The fitted CATE score is wrapped as a prediction function and attributed over the four raw fields with model-agnostic permutation SHAP \citep{lundberg2017}. The attributions describe how $\hat\tau(x)$ changes relative to its background expectation; they are not causal effects of the covariates. Since treatment-effect-specific explanation methods already exist, including PWSHAP \citep{terminassian2023}, DISCRET \citep{wu2024}, and PermuCATE \citep{paillard2025}, we use the narrower term \emph{effect-function attribution} rather than introducing a new causal explanation method.
+
+The implementation also applies the classical E-value transformation to model-predicted arm risks. Since the E-value was introduced for treatment--outcome associations on the risk-ratio scale \citep{vanderweele2017}, a local transformation of two predicted arm risks is not the same estimand, and we use it only as an E-value-inspired robustness diagnostic. Formal treatments under hidden confounding include ignorance intervals \citep{jesson2021} and B-Learner bounds \citep{oprescu2023}.
+
+Figure~\ref{fig:architecture} summarizes the separation between runtime quantities and semi-synthetic ground truth used only for evaluation.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{architecture.png}
+\caption{CaML-OP architecture. Dashed orange components use semi-synthetic ground truth and are available only during evaluation, including the split-conformal calibration scores. The path to the agent propagates the CATE score, calibrated interval, abstention state, arm-level predictions, attributions, and diagnostics. The interval and abstention state depend on the evaluation-only calibration factor, so this path is fully instantiated only in the benchmark.}
+\label{fig:architecture}
+\end{figure}
+
+\subsection{Runtime-checked narrative agent}
+The narrative agent receives a structured patient state rather than raw clinical records: the estimated CATE score, the calibrated interval and abstention flag (both from the evaluation-only conformal threshold of Section~3.2), estimated arm-level outcomes, effect-function attributions, model disagreement, and the robustness diagnostic. The generator must return a typed tool call containing a narrative, a direction state, cited features, tagged numerical claims, and a declared dominant uncertainty source (schema in Appendix~A.11).
+
+Five deterministic checks are applied before release: direction/abstention consistency; membership of cited features in the supplied attribution set; agreement of tagged numerical claims with the corresponding model quantities; consistency between declared direction and the ordering of estimated arm outcomes; and agreement between the declared dominant uncertainty source and a deterministic ranking of the diagnostic signals (thresholds in Appendix~A.12). A failed check produces targeted feedback and another attempt; exhaustion of two retries yields an \texttt{ESCALATED} state for human review. The checks verify consistency with model outputs, not medical correctness.
+
+The interface also provides a bounded local model-sensitivity query: an input field is perturbed and the fitted models re-evaluated at the modified input. Without a structural causal model giving the perturbation intervention semantics, this is not a patient counterfactual \citep{pearl2009}.
+
+\section{Results}
+\subsection{Estimation accuracy}
+Table~\ref{tab:main} summarizes the primary benchmark. The cross-fitted CaML-OP variant ranks second of nine on PEHE and MAE, ahead of the causal forest and both other CaML-OP variants and behind the S-Learner; the orthogonalization-based baselines occupy the bottom of the ranking.
+
+\begin{table}[t]
+\caption{Mean estimation error over four DGPs and ten runs per DGP, four-field pre-treatment covariate set. Lower is better for PEHE, MAE, and ATE error. Sign accuracy is averaged over the DGPs whose probability-scale effect has both signs; DGP 1 uses a constant positive latent treatment shift and therefore has a single-sign probability-scale CATE, so it is excluded from that column.}
+\label{tab:main}
+\centering\footnotesize
+\begin{tabular}{lrrrr}\toprule
+Method & PEHE & MAE & ATE error & Sign acc.\\\midrule
+S-Learner & 0.0911 & 0.0712 & 0.0357 & 0.5760\\
+CaML-OP [C, cross-fitted] & 0.0972 & 0.0792 & 0.0555 & \textbf{0.5988}\\
+Causal Forest & 0.1326 & 0.1101 & 0.0546 & 0.5685\\
+CaML-OP [B, leaky] & 0.1711 & 0.1318 & 0.0564 & 0.5517\\
+X-Learner & 0.1734 & 0.1397 & 0.0519 & 0.5879\\
+CaML-OP [A, raw] & 0.1848 & 0.1470 & 0.0585 & 0.5779\\
+T-Learner & 0.2202 & 0.1751 & 0.0490 & 0.5636\\
+NonParamDML & 0.2612 & 0.2039 & 0.0628 & 0.5670\\
+DRLearner & 0.2752 & 0.2116 & 0.0735 & 0.5617\\\bottomrule
+\end{tabular}
+\end{table}
+
+Paired 95\% bootstrap intervals over the 40 (DGP, seed) pairs sharpen this ordering. Variant C lowers PEHE by 0.0875 (CI $-$0.0962 to $-$0.0787) against raw covariates and by 0.0739 (CI $-$0.0843 to $-$0.0635) against the leaky variant, with MAE differences of the same sign; in both contrasts the ATE-error interval contains zero. Against the S-Learner, the PEHE difference of $+$0.0061 (CI $-$0.0022 to $+$0.0145) is small and its 95\% bootstrap interval includes zero, whereas MAE $+$0.0081 (CI $+$0.0006 to $+$0.0157) and ATE error $+$0.0198 (CI $+$0.0091 to $+$0.0302) favor the S-Learner. The representation therefore improves the shape of the estimated effect surface without improving the average effect it implies.
+
+\subsection{Effect direction and signal strength}
+Effect-sign accuracy is the decision-relevant quantity, and it separates the methods far less than PEHE does: all nine lie between 0.5517 and 0.5988 (Figure~\ref{fig:diagnostics}, left). The cross-fitted variant is highest, ahead of the X-Learner at 0.5879 and the S-Learner at 0.5760; the leaky variant is lowest. A 47.4\% reduction in PEHE is accompanied by only a 2.1-point increase in sign accuracy over raw covariates. The dashed 0.5 line is shown only as a visual reference. Because sign prevalence is not reported per DGP, we do not interpret 0.5 as a chance or majority-class baseline; sign accuracy is used here only for relative comparison among methods.
+
+\subsection{Representation ablation}
+The cross-fitted representation improves PEHE over raw covariates in DGP 1 (constant shift), DGP 2 (linear shift), DGP 3 (nonlinear shift), and DGP 4 (nonlinear + interaction shift), with reductions of 52.0\%, 46.4\%, 49.6\%, and 41.8\%, respectively; overall, PEHE falls by 47.4\%, and the leaky representation is outperformed in every DGP.
+
+The leaky representation yields only a 7.4\% overall PEHE reduction, whereas the cross-fitted representation yields 47.4\%. The representation benefit is therefore strongly protocol-dependent in this benchmark.
+
+\subsection{Coverage and abstention}
+Thirty independent repetitions of the split-conformal procedure on DGP~4 use calibration sets of 106 and evaluation sets of 107. Achieved coverage matches the nominal target at every level---0.799, 0.902, 0.955, and 0.990 against 0.80, 0.90, 0.95, and 0.99---and the 95\% interval across repetitions contains the target in all four cases (Figure~\ref{fig:diagnostics}, right).
+
+Coverage is the least informative of the three quantities. Abstention, the share of evaluation cases whose calibrated interval spans zero, rises from 0.850 at the 0.80 target to 0.994 at 0.95 and 1.000 at 0.99, and mean width from 0.323 through 0.450 and 0.613 to 0.984. Under oracle split-conformal calibration, nominal coverage is achieved only alongside near-total abstention at the higher coverage targets.
+
+\begin{figure}[t]
+\centering
+\begin{minipage}[t]{0.44\linewidth}
+  \centering
+  \includegraphics[width=\linewidth]{sign_accuracy.png}
+\end{minipage}\hfill
+\begin{minipage}[t]{0.44\linewidth}
+  \centering
+  \includegraphics[width=\linewidth]{calibration_sweep.png}
+\end{minipage}
+\caption{Primary semi-synthetic diagnostics. Left: effect-sign accuracy by method in the primary four-field benchmark; CaML-OP variants are shaded, and the dashed 0.5 line is a visual reference only and is not interpreted as a chance or majority-class baseline. Right: repeated split-conformal calibration on DGP~4 over 30 independent splits; markers are means and bars are 95\% intervals across repetitions, with known simulated CATE used only for evaluation.}
+\label{fig:diagnostics}
+\end{figure}
+
+\subsection{Verifier and retry behavior under live models}
+The agent is evaluated on 160 synthetic structured evaluation states, stratified across score sign, interval width, model disagreement, and robustness warning; 93 require abstention. Two backends from one model family are used: \texttt{claude-sonnet-5} at default temperature and \texttt{claude-haiku-4-5-20251001} at temperature 0.0. Four conditions run on identical states: (A) free-text baseline, (B) typed tool-call output without the gate, (C) typed output with the five checks, and (D) checks plus up to two targeted retries (Table~\ref{tab:llm}).
+
+
+When generation is unconstrained, the Sonnet backend asserts a treatment direction on states where the model is in abstention; the Haiku free-text condition was not rescored with the corrected parser, so no free-text rate is reported for it. Moving to a typed tool call drives the observed rate to 0.000 before any gate is applied, in conditions B, C, and D for both backends. The remaining failures differ by backend. Haiku misstates tagged numbers on 46.9\% of states in condition B and clears all five checks on 19.4\%; two retries reduce the observed numeric-error rate to 0.000 and bring the verified pass rate to 1.000 with no escalations. Sonnet produces no numeric errors in any condition, yet clears all five checks on only 45.0\% of states in B, rising to 78.1\% in D, with 21.9\% escalating after two retries. Escalation in C equals one minus the condition-B pass rate by construction. Condition D costs 2.14 calls per case for Sonnet and 2.59 for Haiku, at 12.4\,s and 9.9\,s mean latency.
+
+
+A mock-backend control-loop test with 30\% per-call corruption over 1,000 trials gives pass rates of 0.736, 0.930, and 0.978 at zero, one, and two retries; that synthetic process is not a substitute for the live-model rates above.
+
+Condition A carries a measurement caveat that is itself a finding. Free text has no typed direction field, so it must be scored by parsing narratives; our initial parser matched the bare substring ``benefit'' and, on a 30-state audit, marked 29 of 30 narratives as positive assertions, four of them negative effects. A rewritten parser handling negation and hedging (Appendix~A.14) gives, for the Sonnet backend, an abstention-violation rate of 0.176 under a lenient rubric and 0.471 under a strict rubric counting any signed statement; the wrong-direction rate on non-abstention states is 0.000 under both. That a rubric choice moves the headline number by nearly a factor of three on identical text is why the typed-output comparison is the load-bearing one.
+
+\begin{table}[t]
+\caption{Live-LLM evaluation over 160 synthetic structured evaluation states. Condition A is scored by parsing free text under the lenient rubric of Section~4.5; the strict rubric gives 0.471 for the Sonnet backend, and the Haiku free-text condition was not rescored with the corrected parser. Released-unsupported rate equals the unsupported-direction rate in condition A and is 0.000 in B, C, and D.}
+\label{tab:llm}
+\centering\footnotesize
+\begin{tabular}{llrrrrr}\toprule
+Backend & Cond. & Unsup. dir. & Numeric err. & Verified pass & Escalation & Calls/case\\\midrule
+Sonnet 5 & A & 0.176 & 0.000 & --- & 0.000 & 1.00\\
+Sonnet 5 & B & 0.000 & 0.000 & 0.450 & 0.000 & 1.00\\
+Sonnet 5 & C & 0.000 & 0.000 & 0.450 & 0.550 & 1.00\\
+Sonnet 5 & D & 0.000 & 0.000 & 0.781 & 0.219 & 2.14\\\midrule
+Haiku 4.5 & A & n/a & 0.000 & --- & 0.000 & 1.00\\
+Haiku 4.5 & B & 0.000 & 0.469 & 0.194 & 0.000 & 1.00\\
+Haiku 4.5 & C & 0.000 & 0.469 & 0.194 & 0.806 & 1.00\\
+Haiku 4.5 & D & 0.000 & 0.000 & 1.000 & 0.000 & 2.59\\\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Failure analysis and boundary conditions}
+The negative results arise from several conditions. The DGPs are relatively smooth; benchmark design can favor particular inductive biases \citep{curth2021}. Sign accuracy is tightly clustered across all methods despite the large PEHE difference. Because sign prevalence is not reported per DGP, these values should not be interpreted against a chance baseline. The oracle split-conformal results show that achieving nominal coverage requires intervals wide enough to produce near-total abstention at higher targets.
+
+These limitations also define the role of the narrative agent. Deterministic checks can prevent generated text from contradicting an abstention state, citing unavailable features, reporting inconsistent numbers, or reversing the estimated arm ordering, but cannot transform a weakly supported causal quantity into a clinically valid one. CaML-OP therefore separates estimation from communication: the causal layer determines what the model supports, the verification layer what the agent may say about it. Table~\ref{tab:failure} summarizes the observed failures and the boundary conditions they expose. The live-LLM evaluation uses synthetic structured states rather than end-to-end outputs from the TCGA benchmark.
+
+\begin{table}[t]
+\caption{Observed failure modes and their empirical boundary conditions.}
+\label{tab:failure}
+\centering\footnotesize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{p{0.21\textwidth}p{0.28\textwidth}p{0.43\textwidth}}\toprule
+Finding & Evidence & Boundary condition / implication\\\midrule
+Simple baseline not outperformed & PEHE 0.0911 (S-Learner) vs.\ 0.0972 (CaML-OP [C]); paired CI spans zero & A small PEHE difference whose CI includes zero, and a loss on MAE and ATE error.\\
+Sign-accuracy gains are small & Sign accuracy 0.5517--0.5988 across nine methods & Methods remain tightly clustered; absolute interpretation requires a sign-prevalence baseline.\\
+Calibration only through abstention & Coverage 0.955 at the 0.95 target; abstention 0.994 & Nominal coverage is attainable and uninformative; the oracle threshold is not transferable.\\
+Representation gain is protocol-dependent & Cross-fitted encoder cuts PEHE 47.4\% vs.\ raw; leaky encoder 7.4\% & The measured benefit depends on the encoder protocol, not on the encoder alone.\\
+Free text cannot be scored stably & Violations 0.176 vs.\ 0.471 on identical Sonnet text & Typed fields are what make the safety claim measurable.\\
+Verification bounds behavior, not validity & Verified pass 0.450$\rightarrow$0.781 (Sonnet), 0.194$\rightarrow$1.000 (Haiku) & Checks enforce model-state consistency; escalation is the honest output\\\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Related work}
+The causal estimand follows the potential-outcomes framework \citep{imbens2015}, and the estimation backbone relates to meta-learners \citep{kunzel2019}, causal forests \citep{wager2018}, double/debiased machine learning \citep{chernozhukov2018}, R-learner estimation \citep{nie2021}, and doubly robust CATE estimation \citep{kennedy2023}. Our representation stage uses XGBoost leaf features \citep{chen2016} with cross-fitting motivated by the same leakage-control logic used for nuisance estimation \citep{chernozhukov2018}, and our benchmark interpretation follows \citet{curth2021}, who show that method rankings can depend strongly on benchmark design.
+
+For interpretation and uncertainty, standard SHAP attributes the fitted effect function \citep{lundberg2017}, while PWSHAP \citep{terminassian2023}, DISCRET \citep{wu2024}, and PermuCATE \citep{paillard2025} give treatment-effect-specific alternatives. Conformal treatment-effect inference requires explicit causal assumptions \citep{lei2020}; hidden-confounding sensitivity is studied more directly through the E-value \citep{vanderweele2017}, ignorance intervals \citep{jesson2021}, and B-Learner bounds \citep{oprescu2023}. VeriFact \citep{chung2025} is related to our communication layer, though our verifier checks model-produced quantities rather than EHR evidence, and the distinction between model-sensitivity perturbations and causal interventions follows \citet{pearl2009}.
+
+\section{Limitations}
+The study is a methodological semi-synthetic benchmark, not a clinical validation: treatment assignment and potential outcomes are simulated, so no real-world platinum-treatment effect is identified. Only four pre-treatment fields are available, too sparse for a credible real-world adjustment set, and baseline overlap is comfortable by construction, so positivity violations are not probed. The conformal calibration is an oracle procedure that uses known semi-synthetic $\tau(x)$: the resulting multiplier cannot be computed for real patients, no subgroup-conditional coverage is claimed, and calibration sets of 106 observations leave visible variation between repetitions. The two language-model backends differ in size but come from a single model family, so cross-provider generalization is untested; the free-text baseline is scored by a text parser under two rubrics rather than by clinician judgment, and was not rescored for the smaller backend. No clinician has assessed the narratives, abstention behavior, or interface.
+
+\section{Conclusion}
+The central empirical result is that a substantial modeling improvement can leave the decision unchanged. Cross-fitting the supervised representation cuts PEHE by 47.4\% and lifts CaML-OP to second of nine methods, yet effect-sign accuracy moves only from 0.5779 to 0.5988 and the oracle calibrated interval abstains on 0.994 of evaluation cases at the 0.95 target. With a small sample, sparse clinical information, and near-total abstention, an individualized CATE score can be improved, calibrated, and still give no reliable basis for directional action.
+
+CaML-OP makes this distinction operational. In this benchmark, an abstention state blocks directional narration when the calibrated interval spans zero, and the generator--verifier agent must remain consistent with the model state before output is released. Typed output reduces the observed unsupported-direction rate to 0.000, compared with 17.6\% to 47.1\% for free text from the larger backend, depending on the rubric. Targeted retry converts most remaining check failures into either a verified narrative or an explicit escalation. This does not repair identification, calibration, or clinical validity; it prevents the communication layer from hiding those limitations. Recognizing when the evidence does not support a directional claim is a capability distinct from estimating the score itself.
+
+\section*{Reproducibility, ethics, and LLM-use disclosure}
+The experiments use TCGA-OV covariates with semi-synthetic treatment and outcome mechanisms; the study does not provide treatment advice, and code and supplementary material remain anonymous during double-blind review. Large language model tools were used for drafting support and language editing, not to generate results or determine statistical conclusions; the authors are responsible for the final text, results, figures, and references. The models used within the narrative agent are part of the method and are named in Section~4.5 and Appendix~A.9.
+
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\input{appendix_reproducibility}
+
+\end{document}

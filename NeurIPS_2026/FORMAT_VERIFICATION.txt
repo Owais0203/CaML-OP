@@ -1,0 +1,24 @@
+Formatting preflight performed on main.tex
+
+- article document class
+- NeurIPS 2026 double-blind workshop option selected
+- workshop title supplied through \workshoptitle
+- no final or preprint option
+- title and author macros present; source remains anonymous
+- abstract is a single paragraph
+- tables use booktabs and captions are placed before tabular content
+- figure captions are placed after figures
+- references use natbib-compatible citations and plainnat bibliography style
+- 19 bibliography entries; all 19 are cited; no undefined citation keys in the source audit
+- all \ref targets resolve in the source audit
+- figures are referenced in the manuscript
+- three tables (tab:main, tab:llm, tab:failure) and two figure environments
+  (fig:architecture, fig:diagnostics) are present and referenced
+- local compile completes with no LaTeX errors, no undefined citations, and no
+  undefined references
+- official NeurIPS style controls margins, type size, line numbers, and US Letter layout
+
+Re-run the compile with the official neurips_2026.sty before upload and inspect every
+page at 100%. The live-LLM results added in Section 4.5 make the manuscript longer than
+the previous version, so confirm the main-text allowance against the official style
+rather than against any local preflight.

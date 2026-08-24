@@ -1,0 +1,489 @@
+% ============================================================
+% Appendix A. Reproducibility details  (article-class version)
+% Included after \bibliography{references}
+% ============================================================
+\appendix
+\section*{Appendix A. Reproducibility details}
+\addcontentsline{toc}{section}{Appendix A. Reproducibility details}
+
+The reproducibility details below are taken directly from the implementation and saved experimental outputs. Relevant source files include \texttt{code.py} (data-generating processes, base learners, and metrics), \texttt{task\_common.py} (data loading, cross-fitted encoder, conformal threshold, and bootstrap procedure),
+\texttt{task1\_cate\_benchmark.py}, \texttt{task2\_conformal.py},
+\texttt{task3\_llm\_verifier.py}, \texttt{llm\_narrative\_agent.py},
+\texttt{freetext\_scoring.py} and \texttt{sensitivity\_analysis.py}.
+
+\subsection*{A.1 Cohort and design matrices}
+
+Source table: \texttt{tcga\_ov\_master\_ml.csv} (TCGA-OV). Fields used:
+\texttt{age\_at\_diagnosis}, \texttt{figo\_stage}, \texttt{race},
+\texttt{ethnicity} (primary, four fields).
+The GDC missing marker \texttt{'--} is mapped to
+\texttt{NaN} and those rows are dropped; \texttt{"not reported"} is retained as
+a legitimate category level. Age is converted to years as
+\texttt{age\_at\_diagnosis / 365.25}. FIGO stage is mapped to an explicit
+clinical ordinal with sub-stages collapsed to the major stage
+($\mathrm{I}\!\to\!1$, $\mathrm{II}\!\to\!2$, $\mathrm{III}\!\to\!3$,
+$\mathrm{IV}\!\to\!4$); an unmapped stage raises an error rather than being
+silently coded. The source table holds 547 TCGA-OV records. Dropping rows whose
+analysis fields carry the GDC missing marker leaves $n = 425$, and every number
+reported in the paper is computed on those 425 rows; the 547 figure describes the
+extracted table before missing-value filtering and is not an analysis sample size.
+The split sizes follow directly: $318/107$ for the Task~1 train/test split and
+$212/106/107$ for the Task~2 model-training/calibration/evaluation split.
+
+Two design matrices are built from the same rows:
+
+\begin{itemize}\tightlist
+\item \textbf{Estimator design $X_{\mathrm{est}}$} ($p = 9$ columns, primary
+four-field set): \texttt{age}, \texttt{stage\_ordinal}, and one-hot indicators
+(\texttt{drop\_first=True}, lower-cased and stripped levels) for race
+(\texttt{asian}, \texttt{black or african american},
+\texttt{native hawaiian or other pacific islander}, \texttt{not reported},
+\texttt{white}) and ethnicity (\texttt{not hispanic or latino},
+\texttt{not reported}). Every method sees this identical design.
+\item \textbf{Simulation design $X_{\mathrm{sim}}$} (4 columns):
+$[\texttt{age},\ \texttt{stage\_ord},\ \texttt{race\_code},\
+\texttt{ethnicity\_code}]$, with integer category codes for the two
+categorical fields. Age stays in column 0 and stage in column 1 so the DGP's
+$\delta(\cdot)$ and propensity remain functions of standardised age and stage.
+\end{itemize}
+
+\subsection*{A.2 Data-generating process}
+
+$X_{\mathrm{sim}}$ is column-standardised,
+$X_s = (X - \bar{X}) / (\sigma_X + 10^{-8})$, with $d = 4$. Coefficient vectors
+are drawn \emph{once} from a fixed generator
+(\texttt{numpy.random.RandomState(123)}), so they are identical across all
+scenarios, seeds and repetitions:
+\[
+\beta_0 \sim \mathcal{N}(0, 0.5^2)^{d},\qquad
+\beta_1 \sim \mathcal{N}(0, 0.5^2)^{d},\qquad
+f = X_s\beta_0 .
+\]
+Let $a = X_{s,\cdot 0}$ (standardised age) and $s = X_{s,\cdot 1}$
+(standardised stage), and $\sigma(z) = 1/(1+e^{-z})$. The four DGPs are:
+\[
+\begin{aligned}
+\text{DGP 1 (constant): } &\ \delta = 0.5\cdot\mathbf{1}_n,\\
+\text{DGP 2 (linear): } &\ \delta = 0.4\,a + 0.3\,s,\\
+\text{DGP 3 (nonlinear): } &\ \delta = 1.0\,\sigma(X_s\beta_1) - 0.5,\\
+\text{DGP 4 (nonlinear + interaction): } &\ \delta = 1.0\,\sigma(X_s\beta_1) - 0.5 + 0.4\,a\,s.
+\end{aligned}
+\]
+
+\paragraph{Treatment assignment.}
+\[
+e(X) = \sigma(-0.6\,a - 0.4\,s),\qquad T_i \sim \mathrm{Bernoulli}(e_i),
+\]
+drawn as $T_i = \mathbf{1}\{u_i < e_i\}$ with $u_i$ from the per-run generator.
+Coefficients $(-0.6, -0.4)$ and no intercept.
+
+\paragraph{Potential outcomes and noise.}
+Outcomes are simulated binary outcomes, interpreted in the narrative benchmark as five-year survival; they are not observed TCGA survival outcomes. There is no additive Gaussian noise term; all stochasticity is Bernoulli sampling:
+\[
+p_0 = \sigma(f),\quad p_1 = \sigma(f + \delta),\quad
+Y_i(0)\sim\mathrm{Bernoulli}(p_{0i}),\quad Y_i(1)\sim\mathrm{Bernoulli}(p_{1i}),
+\]
+$Y_i = T_i Y_i(1) + (1-T_i)Y_i(0)$, and the estimand (ground truth for PEHE) is
+$\tau^{\mathrm{true}} = p_1 - p_0$ on the probability scale. $Y(0)$, $Y(1)$ and
+$T$ are drawn from a single \texttt{numpy.random.RandomState(seed)} in the order
+$T$, $Y(0)$, $Y(1)$.
+
+\subsection*{A.3 Random seeds and split logic}
+
+\begin{itemize}\tightlist
+\item Global seed in \texttt{code.py}: \texttt{SEED = 42} (\texttt{np.random.seed(42)}); default \texttt{LeafEncoder} seed.
+\item DGP coefficient seed: \texttt{123} (fixed, shared across all runs).
+\item \textbf{Task 1:} \texttt{seed} $\in \{0,\dots,9\}$ (10 seeds) $\times$ 4 DGPs $\times$ 9 methods $=$ 360 rows in \texttt{cate\_benchmark\_primary.csv}. The same \texttt{seed} value is used for the DGP draw, the split, and every estimator's \texttt{random\_state}, so all methods see an identical split.
+\item \textbf{Task 1 split:} \texttt{train\_test\_split(test\_size=0.25, random\_state=seed, stratify=T)}, i.e.\ 75/25 train/test ($318$ train, $107$ test before trimming). Propensity trimming $0.05 < e_i < 0.95$ is applied \emph{to the training fold only}; the test fold is untrimmed.
+\item \textbf{Task 2:} 30 repetitions, \texttt{rep} $\in \{0,\dots,29\}$, DGP scenario 4. Nested split, both stratified on $T$: first \texttt{train\_test\_split(test\_size=0.5, random\_state=rep)} $\rightarrow$ model-training ($212$) vs.\ rest ($213$); then \texttt{train\_test\_split(rest, test\_size=0.5, random\_state=rep+10000, stratify=T[rest])} $\rightarrow$ calibration $n=106$ / evaluation $n=107$. Effective ratio 50/25/25. Splitting happens \emph{before} any fitting; the $0.05$--$0.95$ trim again applies only to the model-training fold.
+\item \textbf{Task 3:} state generator \texttt{numpy.random.default\_rng(7)}; expanded stress-test generator \texttt{random.Random(3)}; mock backend \texttt{random.Random(11)} with corruption probability $0.30$ (validation only, never reported as a live result).
+\item Bootstrap seed: \texttt{numpy.random.default\_rng(0)}.
+\end{itemize}
+
+\subsection*{A.4 XGBoost settings (leaf-representation encoder)}
+
+\texttt{xgboost.XGBClassifier} with \texttt{n\_estimators=100},
+\texttt{max\_depth=4}, \texttt{learning\_rate=0.1},
+\texttt{eval\_metric="logloss"}, \texttt{random\_state=seed},
+\texttt{verbosity=0}; all other parameters at library defaults. It is fit on
+$(X, Y)$ and used only via \texttt{.apply()} to extract per-tree leaf
+assignments, which are one-hot encoded and concatenated to the raw covariates.
+
+\paragraph{Cross-fitted encoder (variant C, primary).}
+\texttt{StratifiedKFold(n\_splits=5, shuffle=True, random\_state=seed)} on the
+training fold, stratified on $Y$ (or on a constant vector if $Y$ is degenerate).
+For each fold an encoder is fit on the other $K-1$ folds and applied to the
+held-out fold, so no held-out outcome enters its own representation. Leaf
+columns are keyed by (tree index, exact split path) rather than by the numeric
+leaf ID, because independent XGBoost fits do not share leaf numbering; the union
+of keys across folds defines one shared column dictionary. For unseen data all
+five fold-encoders are applied and their aligned one-hot matrices are averaged.
+Variant B (\emph{leaky}) fits one encoder on the full training
+fold; variant A uses raw covariates with no leaf features.
+
+\subsection*{A.5 Base learners and estimator settings}
+
+All nuisance and meta-learner base models are scikit-learn forests:
+\begin{itemize}\tightlist
+\item \texttt{make\_rf\_reg(seed)} $=$ \texttt{RandomForestRegressor(n\_estimators=200, max\_depth=6, min\_samples\_leaf=5, random\_state=seed)}.
+\item \texttt{make\_rf\_clf(seed)} $=$ \texttt{RandomForestClassifier(n\_estimators=200, max\_depth=6, min\_samples\_leaf=5, random\_state=seed)}.
+\end{itemize}
+All other arguments are library defaults.
+
+\begin{table}[H]
+\centering\small
+\caption{Estimator configurations (EconML 0.16.0 unless noted). Table~\ref{tab:main} reports the \texttt{NonParamDML} and \texttt{DRLearner} rows under these implementation names; \texttt{ForestDRLearner} is the doubly robust arm inside CaML-OP and is not a standalone baseline row.}
+\begin{tabular}{@{}ll@{}}
+\toprule
+Method & Configuration \\
+\midrule
+S-Learner & \texttt{SLearner(overall\_model=make\_rf\_reg(seed))} \\
+T-Learner & \texttt{TLearner(models=make\_rf\_reg(seed))} \\
+X-Learner & \texttt{XLearner(models=make\_rf\_reg(seed),} \\
+          & \quad \texttt{propensity\_model=make\_rf\_clf(seed))} \\
+Causal Forest & \texttt{CausalForestDML(model\_y=make\_rf\_reg(seed),} \\
+              & \quad \texttt{model\_t=make\_rf\_clf(seed), discrete\_treatment=True,} \\
+              & \quad \texttt{n\_estimators=300, min\_samples\_leaf=5, cv=5,} \\
+              & \quad \texttt{random\_state=seed)}; 95\% intervals via \\
+              & \quad \texttt{effect\_interval(X, alpha=0.05)} \\
+NonParamDML & \texttt{NonParamDML(model\_y=make\_rf\_reg(seed),} \\
+(R-learner row) & \quad \texttt{model\_t=make\_rf\_clf(seed), model\_final=make\_rf\_reg(seed),} \\
+          & \quad \texttt{discrete\_treatment=True, cv=5, random\_state=seed)} \\
+DRLearner & \texttt{DRLearner(model\_propensity=make\_rf\_clf(seed),} \\
+(DR-learner row) & \quad \texttt{model\_regression=make\_rf\_reg(seed),} \\
+           & \quad \texttt{model\_final=make\_rf\_reg(seed), cv=5, random\_state=seed)} \\
+ForestDRLearner & \texttt{ForestDRLearner(model\_regression=make\_rf\_reg(seed),} \\
+(CaML-OP DR arm) & \quad \texttt{model\_propensity=make\_rf\_clf(seed), n\_estimators=300,} \\
+                 & \quad \texttt{min\_samples\_leaf=5, cv=5, random\_state=seed)} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Causal forest implementation.}
+The causal forest is EconML's \texttt{CausalForestDML} (generalised random
+forest / honest causal forest), not the R \texttt{grf} package; settings as
+above.
+
+\paragraph{CaML-OP ensemble.}
+On the (possibly leaf-augmented) design, the R component
+(\texttt{NonParamDML}) and DR component (\texttt{ForestDRLearner}) are fit on
+the same training fold and combined with fixed equal weights,
+$\hat{\tau} = 0.5\,\hat{\tau}_R + 0.5\,\hat{\tau}_{DR}$. The reported interval
+is heuristic: the \texttt{ForestDRLearner} 95\% interval half-width is
+multiplied by $1.10$ and re-centred on $\hat{\tau}$, i.e.
+$\hat{\tau} \pm 1.10\,(\hat{h}_{DR}^{\mathrm{hi}} - \hat{h}_{DR}^{\mathrm{lo}})/2$.
+The $1.10$ inflation is a stated convention acknowledging ensemble noise, not a
+calibrated quantity.
+
+\paragraph{Metrics.}
+$\mathrm{PEHE} = \sqrt{\frac{1}{n}\sum_i(\tau_i - \hat{\tau}_i)^2}$;
+$\mathrm{MAE} = \frac{1}{n}\sum_i |\tau_i - \hat{\tau}_i|$;
+ATE error $= |\overline{\tau} - \overline{\hat{\tau}}|$. Sign accuracy is
+$\frac{1}{n}\sum_i \mathbf{1}\{\operatorname{sign}\hat{\tau}_i = \operatorname{sign}\tau_i\}$,
+reported as \texttt{NaN} (and excluded from means) whenever the true surface has
+a single sign on that test set---which is why DGP 1 rows carry no sign
+accuracy. Policy value uses the AIPW estimator with propensity clipped to
+$[0.05, 0.95]$ and shared plug-in arm regressions $\hat{\mu}_0, \hat{\mu}_1$ fit
+once per run on the training fold.
+
+\subsection*{A.6 Bootstrap procedure}
+
+Paired, non-parametric, over the $(\text{DGP}, \text{seed})$ pairing key.
+For each contrast, per-pair PEHE differences $d_j$ are formed by aligning the
+two methods on \texttt{(dgp, seed)}; $B = 10{,}000$ resamples of size $|d|$ are
+drawn with replacement using \texttt{numpy.random.default\_rng(0)}; the
+statistic is the resample mean; the interval is the percentile interval at
+level $0.95$, i.e.\ the empirical $2.5\%$ and $97.5\%$ quantiles of the
+bootstrap means. No bias correction or acceleration is applied. Contrasts
+reported: CaML-OP[C\_crossfit] $-$ S-Learner, and CaML-OP[C\_crossfit] $-$
+CaML-OP[A\_raw], with $n_{\text{pairs}} = 40$.
+
+Repetition-level intervals in the conformal study are percentile intervals over
+the 30 repetitions (empirical $2.5\%$/$97.5\%$ quantiles), not bootstrap
+intervals.
+
+\subsection*{A.7 Conformal calibration settings}
+
+Split conformal on the held-out calibration fold, with the nonconformity score
+formed against the \emph{known} semi-synthetic CATE (an oracle quantity,
+available only because outcomes are simulated):
+\[
+s_i = \frac{|\tau_i - \hat{\tau}_i|}{\max(\hat{h}_i,\ \varepsilon)},
+\qquad \varepsilon = 10^{-9},
+\]
+where $\hat{h}_i$ is the uncalibrated heuristic half-width from
+Section~A.5. The threshold is the $k$-th order statistic of the calibration
+scores,
+\[
+k = \min\!\big(\max(\lceil (n+1)\,(1-\alpha) \rceil,\ 1),\ n\big),
+\qquad \hat{q} = s_{(k)},
+\]
+with the finite-sample $(n+1)$ correction. A plain
+\texttt{np.quantile(scores, target)} is deliberately \emph{not} used. The
+threshold is then frozen and the calibrated interval on the untouched
+evaluation fold is $\hat{\tau}_i \pm \hat{q}\max(\hat{h}_i, \varepsilon)$.
+Target levels: $0.80$, $0.90$, $0.95$, $0.99$. Abstention is defined as the
+calibrated interval spanning zero. Calibration $n = 106$, evaluation
+$n = 107$, 30 repetitions, DGP 4. Coverage is marginal only; no
+subgroup-conditional guarantee is claimed.
+
+\subsection*{A.8 Software environment}
+
+Python 3.10.11 (Windows). Package versions as installed in the project virtual
+environment at the time of the reported runs:
+
+\begin{table}[H]
+\centering\small
+\caption{Package versions.}
+\begin{tabular}{@{}ll@{}}
+\toprule
+Package & Version \\
+\midrule
+numpy & 2.2.6 \\
+pandas & 2.3.3 \\
+scikit-learn & 1.6.1 \\
+scipy & 1.15.3 \\
+statsmodels & 0.14.6 \\
+xgboost & 3.2.0 \\
+econml & 0.16.0 \\
+lifelines & 0.30.0 \\
+shap & 0.48.0 \\
+matplotlib & 3.10.9 \\
+seaborn & 0.13.2 \\
+requests & 2.34.2 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection*{A.9 LLM experiment: models, date, decoding}
+
+\begin{itemize}\tightlist
+\item Exact model IDs: \texttt{claude-sonnet-5} and
+\texttt{claude-haiku-4-5-20251001}, called through the Anthropic Messages API
+(\texttt{https://api.anthropic.com/v1/messages}, header
+\texttt{anthropic-version: 2023-06-01}).
+\item Date the live experiments were run: \textbf{14 August 2026} (recorded in
+the \texttt{run\_date} column of \texttt{llm\_verifier\_ablation.csv} for every
+row of both models).
+\item Requested temperature: $0.0$. \texttt{claude-haiku-4-5-20251001} accepted
+it and its rows record \texttt{temperature = 0.0};
+\texttt{claude-sonnet-5} rejected the \texttt{temperature} parameter, so the
+harness dropped it and re-issued the call, and those rows record
+\texttt{temperature = model\_default}. No other decoding parameters are set.
+\item \texttt{max\_tokens}: 600 for typed (tool-call) conditions, 400 for the
+free-text baseline. Request timeout 120\,s.
+\item Evaluation set: 160 held-out synthetic patient states
+(\texttt{make\_states(n=160, seed=7)}), stratified over the $3\times2\times2\times2$
+grid \{positive, negative, near-zero effect\} $\times$ \{narrow, wide interval\}
+$\times$ \{low, high R/DR disagreement\} $\times$ \{low, high robustness
+warning\}. \texttt{must\_abstain} is defined deterministically as
+$\mathrm{ci\_lo} \le 0 \le \mathrm{ci\_hi}$.
+\item Conditions on identical states: \textbf{A} free-text baseline (no schema,
+no gate), \textbf{B} typed tool-call output with no gate, \textbf{C} typed
+output $+$ five deterministic checks (\texttt{max\_retries=0}), \textbf{D} typed
+output $+$ five checks $+$ up to two targeted retries
+(\texttt{max\_retries=2}). B, C and D share one typed generation for the first
+attempt (\texttt{shared\_generation=1}) so that B vs.\ C isolates the gate
+exactly; D's retries are fresh calls. Escalated outputs are never released, which
+is what the \texttt{released\_unsupported} column records.
+\item Free-text rubric validation: 30 \texttt{claude-sonnet-5} narratives
+(\texttt{freetext\_validation.csv}).
+\end{itemize}
+
+\subsection*{A.10 System prompt (shortened exact version)}
+
+The prompt is a single user message; there is no separate system prompt. The
+template is reproduced below with the field-substitution placeholders
+kept. A SHA-256 prefix of \texttt{PROMPT\_TEMPLATE + RETRY\_SUFFIX}
+(\texttt{PROMPT\_VERSION}) is stamped into every result row so a stored pass
+rate cannot silently go stale.
+
+\begin{quote}\small\ttfamily\raggedright
+You are a clinical decision-support narrative generator. Given the structured
+outputs of a causal machine-learning model estimating the individualized effect
+of platinum-based chemotherapy on five-year ovarian cancer survival, submit a
+narrative via the submit\_clinical\_narrative tool.\\[4pt]
+Rules (must follow exactly):\\
+- "sign" must be "positive" if tau\_hat > 0 or "negative" if tau\_hat < 0
+\{abstain\_rule\}\\
+- "cited\_features" must contain only feature names drawn from the top drivers
+listed below. Do not invent or include features not listed.\\
+- "cited\_values" must tag every number you state in the narrative with which
+quantity it represents, using exactly one of these tags: tau\_hat, ci\_lo,
+ci\_hi, mu0, mu1, or shap:<feature> for a listed driver. Do not cite a number
+under the wrong tag. You must cite both mu0 and mu1 [\dots]. If "sign" is
+"positive" (benefit), mu1 must exceed mu0; if "negative" (harm), mu0 must
+exceed mu1 [\dots].\\
+- "dominant\_uncertainty\_source" must name whichever of the three uncertainty
+signals below is largest for this patient specifically (not a generic answer):
+"sampling", "model\_disagreement", or "identification" [\dots]. Mention this
+dominant source in the narrative in plain language.\\
+- The "narrative" field itself must be two to three sentences, must state the
+sign/magnitude of the effect and its uncertainty interval in plain language,
+must name the cited features, must mention the dominant uncertainty source, and
+must not introduce outside medical knowledge or claims not derivable from the
+numbers given.\\
+\{abstain\_narrative\_rule\}\\[4pt]
+Patient covariates: \{covariates\}\\
+Estimated ITE (tau\_hat): \{tau\_hat:.3f\}\\
+95\% uncertainty interval: [\{ci\_lo:.3f\}, \{ci\_hi:.3f\}]\\
+Expected outcome if untreated (mu0): \{mu0:.3f\}\\
+Expected outcome if treated (mu1): \{mu1:.3f\}\\
+R-Learner component estimate (tau\_r): \{tau\_r:.3f\}\\
+DR-Learner component estimate (tau\_dr): \{tau\_dr:.3f\}\\
+Top features increasing benefit: \{top\_positive\}\\
+Top features decreasing benefit: \{top\_negative\}
+\end{quote}
+
+\texttt{\{abstain\_rule\}} is inserted only when \texttt{must\_abstain} is
+true: \emph{``-- EXCEPT: a calibrated reliability check on this estimate has
+determined the sign is not statistically distinguishable from zero, so `sign'
+must be `indeterminate' instead, regardless of the raw tau\_hat value above.''}
+Otherwise it is a full stop. The matching
+\texttt{\{abstain\_narrative\_rule\}} requires the narrative to say the effect
+is not reliably distinguishable from no effect and to claim neither benefit nor
+harm.
+
+Condition A uses a deliberately different, unconstrained prompt: the same
+opening sentence and the same numeric patient block, asking for ``a 2--3
+sentence narrative for this patient in plain free text'', with no rule list, no
+tool and no schema.
+
+\subsection*{A.11 Typed output schema}
+
+Anthropic tool \texttt{submit\_clinical\_narrative}, forced via
+\texttt{tool\_choice = \{"type": "tool", "name": "submit\_clinical\_narrative"\}}:
+
+\begin{quote}\small\ttfamily\raggedright
+\{\\
+\hspace*{1em}"narrative": string,\\
+\hspace*{1em}"sign": string, enum ["positive", "negative", "indeterminate"],\\
+\hspace*{1em}"cited\_features": array of string,\\
+\hspace*{1em}"cited\_values": array of \{ "quantity": string, "value": number \},\\
+\hspace*{2em}\quad required: ["quantity", "value"],\\
+\hspace*{1em}"dominant\_uncertainty\_source": string, enum ["sampling",\\
+\hspace*{2em}"model\_disagreement", "identification"]\\
+\}\\
+required: ["narrative", "sign", "cited\_features", "cited\_values",\\
+\hspace*{2em}"dominant\_uncertainty\_source"]
+\end{quote}
+
+Legal \texttt{quantity} tags are exactly
+\texttt{tau\_hat}, \texttt{ci\_lo}, \texttt{ci\_hi}, \texttt{mu0}, \texttt{mu1},
+and \texttt{shap:<feature>} for each listed top driver. A response with no tool
+call is recorded as \texttt{sign="invalid"} and fails the gate.
+
+\subsection*{A.12 The five verifier checks}
+
+Applied to the structured fields, never to prose
+(\texttt{default\_verifiers(tol=0.15, atol=0.005)}):
+
+\begin{enumerate}\tightlist
+\item \textbf{sign.} If \texttt{must\_abstain}, requires
+\texttt{sign == "indeterminate"}. Otherwise requires \texttt{"positive"} if
+$\hat{\tau} > 0$, else \texttt{"negative"}.
+\item \textbf{features.} Set membership: every cited feature must belong to the
+declared top-driver set (union of \texttt{top\_positive} and
+\texttt{top\_negative}); at least one feature must be cited; if the driver set
+is empty, no feature may be cited. No text search is performed.
+\item \textbf{numeric.} Every cited value must match the specific quantity its
+tag claims, within a combined tolerance
+$|v_{\text{cited}} - v_{\text{true}}| \le \max(0.15\,|v_{\text{true}}|,\ 0.005)$.
+A tag that is not in the legal set fails immediately. The absolute floor
+$0.005$ matches the three-decimal display precision used throughout the
+pipeline, which a pure relative tolerance would be unforgivingly tight against
+near $\hat{\tau} \approx 0$.
+\item \textbf{counterfactual consistency.} Both \texttt{mu0} and \texttt{mu1}
+must be cited. If \texttt{sign} is \texttt{"positive"}, the cited
+$\mu_1 > \mu_0$; if \texttt{"negative"}, $\mu_1 < \mu_0$. Vacuously passes when
+the claim is \texttt{"indeterminate"} or the state is \texttt{must\_abstain}.
+\item \textbf{dominant uncertainty.} Must equal the deterministic argmax of
+three normalised scores:
+\[
+\begin{aligned}
+\text{sampling} &= \tfrac{\mathrm{ci\_hi}-\mathrm{ci\_lo}}{0.3}, \quad
+\text{model\_disagreement} = \tfrac{|\tau_R - \tau_{DR}|}{0.05}, \\
+\text{identification} &= \tfrac{2.0}{\max(\mathrm{E},\,10^{-6})},
+\end{aligned}
+\]
+with $\mathrm{E}$ the VanderWeele--Ding E-value on the risk-ratio scale,
+$\mathrm{E} = \mathrm{RR} + \sqrt{\mathrm{RR}(\mathrm{RR}-1)}$ where
+$\mathrm{RR} = \mu_1/\mu_0$ inverted if below 1 and $\mu$ clipped away from
+$\{0,1\}$. The thresholds $0.3$ (CI width), $0.05$ (component disagreement) and
+$2.0$ (fragile E-value) are stated conventions, not empirically calibrated.
+\end{enumerate}
+
+\subsection*{A.13 Retry rule}
+
+\texttt{generate\_and\_check} runs at most \texttt{max\_retries + 1} attempts
+(condition C: \texttt{max\_retries=0}, one attempt; condition D:
+\texttt{max\_retries=2}, up to three attempts). After a failing attempt the
+feedback strings of \emph{only the failing} verifiers are concatenated and
+appended to the prompt together with the rejected submission
+(\texttt{asdict(previous)}) under the suffix: \emph{``Your previous submission
+was rejected by an automated faithfulness check for this reason: \{feedback\}
+Previous submission: \{previous\} Submit a corrected version via
+submit\_clinical\_narrative that fixes this while still following all rules
+above.''} The loop returns \texttt{NarrativeStatus.PASSED} on the first attempt
+where all five checks pass, otherwise
+\texttt{NarrativeStatus.ESCALATED}---a distinct state routed to human review,
+never auto-displayed and never counted as released output.
+
+\subsection*{A.14 Free-text parser and rubric (condition A)}
+
+Condition A has no schema, so the narrative is labelled by a regular-expression
+rubric (\texttt{freetext\_scoring.py}), evaluated in the order a human reader
+would apply it. The rubric replaced an earlier bare-substring parser that
+scored 29/30 validation narratives as \texttt{assert\_pos}, including four
+unambiguous negative assertions.
+
+\begin{itemize}\tightlist
+\item \textbf{no\_direction}: the text states a point estimate but explicitly
+flags that the interval includes zero or the result is inconclusive, and makes
+no treatment recommendation. Hedge patterns include \emph{spans/crosses/includes
+zero}, \emph{cannot (confidently) distinguish / rule out / determine / exclude},
+\emph{inconclusive}, \emph{not statistically significant / definitive /
+conclusive}, \emph{no meaningful benefit / effect / difference}, \emph{little to
+no}, \emph{indeterminate}, \emph{low confidence}, \emph{substantial or
+meaningful uncertainty}, \emph{could range from}, \emph{disagree on the
+direction}.
+\item \textbf{assert\_pos}: the text endorses treatment (\emph{strong /
+favorable / reasonable candidate}, \emph{supports treatment},
+\emph{recommendation favoring}, \emph{reinforcing the recommendation}) or states
+a directional positive conclusion (\emph{meaningfully improves}, \emph{increases
+(predicted) survival}, \emph{clinically meaningful benefit}, \emph{absolute
+benefit of}, \emph{percentage-point increase}) without flagging that the
+interval spans zero.
+\item \textbf{assert\_neg}: the same, in the direction of harm (\emph{lower
+predicted}, \emph{decrease in estimated survival}, \emph{worse expected},
+\emph{reduction in five-year survival}, \emph{unfavorable predicted},
+\emph{negative expected benefit}).
+\end{itemize}
+
+Precedence: an explicit endorsement overrides hedging, because recommending
+treatment is a directional claim however many caveats surround it; otherwise
+hedged $\rightarrow$ \texttt{no\_direction}; otherwise negative patterns before
+positive; default \texttt{no\_direction}. Under the abstention rule a violation
+is any \texttt{assert\_*} on a \texttt{must\_abstain} state; reporting a point
+estimate with an explicit ``this interval spans zero'' caveat is \emph{not}
+counted (the lenient reading). A stricter reading, in which any signed
+directional statement counts as an assertion regardless of caveats
+(\texttt{score\_strict}), is reported alongside it; bare negative numbers are
+never used as evidence, since interval bounds such as ``$-19.8\%$ to
+$+39.5\%$'' would otherwise read as negative claims.
+
+\subsection*{A.15 Verifier stress tests}
+
+Two suites, both deterministic and API-free. (i) The original 15-case
+regression suite from \texttt{narrative\_research\_eval.py}. (ii) An
+auto-generated suite of 128 cases: 14 corrupted cases for each of the eight
+implemented failure classes (\texttt{wrong\_sign},
+\texttt{abstention\_violation}, \texttt{hallucinated\_feature},
+\texttt{wrong\_numeric\_value}, \texttt{unknown\_numeric\_tag},
+\texttt{missing\_mu\_citation}, \texttt{arm\_ordering\_contradiction},
+\texttt{wrong\_uncertainty\_source}) $=112$ cases that must be detected, plus 16
+uncorrupted faithful cases that must pass. Corruptions are injected into the
+deterministic \texttt{mock\_llm} output with \texttt{random.Random(3)}; classes
+that are logically inapplicable to a state are excluded (e.g.\
+\texttt{wrong\_sign} on an abstain state, \texttt{abstention\_violation} on a
+non-abstain state).

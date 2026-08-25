@@ -181,7 +181,7 @@ $\mathrm{MAE} = \frac{1}{n}\sum_i |\tau_i - \hat{\tau}_i|$;
 ATE error $= |\overline{\tau} - \overline{\hat{\tau}}|$. Sign accuracy is
 $\frac{1}{n}\sum_i \mathbf{1}\{\operatorname{sign}\hat{\tau}_i = \operatorname{sign}\tau_i\}$,
 reported as \texttt{NaN} (and excluded from means) whenever the true surface has
-a single sign on that test set---which is why DGP 1 rows carry no sign
+a single sign on that test set, which is why DGP 1 rows carry no sign
 accuracy. Policy value uses the AIPW estimator with propensity clipped to
 $[0.05, 0.95]$ and shared plug-in arm regressions $\hat{\mu}_0, \hat{\mu}_1$ fit
 once per run on the training fold.
@@ -426,7 +426,7 @@ Previous submission: \{previous\} Submit a corrected version via
 submit\_clinical\_narrative that fixes this while still following all rules
 above.''} The loop returns \texttt{NarrativeStatus.PASSED} on the first attempt
 where all five checks pass, otherwise
-\texttt{NarrativeStatus.ESCALATED}---a distinct state routed to human review,
+\texttt{NarrativeStatus.ESCALATED}, a distinct state routed to human review,
 never auto-displayed and never counted as released output.
 
 \subsection*{A.14 Free-text parser and rubric (condition A)}

@@ -2,29 +2,29 @@
 
 \section{The clinical problem}\label{the-clinical-problem}
 
-Ovarian cancer continues to pose a major challenge to global health. Data from the IARC GLOBOCAN report establishes a heavy global baseline with an estimated 324,603 women diagnosed with the disease worldwide in a single year (Bray et al., 2024) and long-term projections estimating a near 47\% increase in global burden by 2050. Because symptoms are often quiet at first, most patients face an advanced diagnosis by the time they see a doctor. This late detection drives down survival rates and places an intense burden on initial treatment decisions. Historically the standard approach relied on primary cytoreductive surgery followed by adjuvant chemotherapy. However recent medical consensus highlights a major practice shift toward using neoadjuvant chemotherapy giving a combination of carboplatin and paclitaxel \emph{before} interval surgery for advanced cases to improve management and surgical outcomes (ASCO, 2025). Yet, how patients respond to these regimens remains incredibly varied. While some individuals experience complete remission, others see their disease progress within months meaning they endure severe side effects for little to no clinical return.
+Ovarian cancer continues to pose a major challenge to global health. Data from the IARC GLOBOCAN report establishes a heavy global baseline with an estimated 324,603 women diagnosed with the disease worldwide in a single year (Bray et al., 2024) and long-term projections estimating a near 47\% increase in global burden by 2050. Because early symptoms are frequently nonspecific, most patients present with advanced disease. This late presentation is associated with reduced survival and places considerable weight on initial treatment decisions. Historically, the standard approach relied on primary cytoreductive surgery followed by adjuvant chemotherapy. More recently, consensus has shifted toward neoadjuvant chemotherapy with carboplatin and paclitaxel prior to interval surgery for advanced disease to improve operability and perioperative outcomes (ASCO, 2025; Colombo et al., 2019). Nevertheless, response to these regimens remains highly heterogeneous. While some individuals experience complete remission, others see their disease progress within months meaning they endure severe side effects for little to no clinical return.
 
-The core problem this thesis tackles is not a biological mystery but an informational one. Right now clinical guidelines depend on population averages from clinical trials. By design these averages cannot predict how a specific individual will react to a drug. While a solid prognostic model can tell us \emph{who} is likely to have a good outcome, it cannot prove whether the treatment itself actually caused that success (Obermeyer and Emanuel, 2016). This gap between prediction and causation has real world consequences for patient well-being. For instance, Prigerson et al. (2015) demonstrated that aggressive chemotherapy near the end of life frequently erodes a patient\textquotesingle s quality of life without offering any survival advantage. Wright et al. (2016) noted similar clinical missteps when doctors lacked specific information on individual treatment effects.
+The core problem this thesis tackles is not a biological mystery but an informational one. Right now clinical guidelines depend on population averages from clinical trials. By design these averages cannot predict how a specific individual will react to a drug. While a solid prognostic model can tell us \emph{who} is likely to have a good outcome, it cannot prove whether the treatment itself actually caused that success (Obermeyer and Emanuel, 2016). This gap between prediction and causation has real-world consequences for patient well-being. For instance, Prigerson et al. (2015) demonstrated that aggressive chemotherapy near the end of life frequently erodes a patient\textquotesingle s quality of life without offering any survival advantage. Wright et al. (2016) noted similar clinical missteps when doctors lacked specific information on individual treatment effects.
 
-Precision oncology has tried to bridge this divide through functional testing, using tools like patient derived xenografts (Gao et al., 2015) and organoid assays (Pauli et al., 2017). The science behind these methods is promising but practical access is restricted to a handful of elite academic medical centers. A patient living in a rural area or relying on a regional hospital rarely has a realistic path to organoid guided care, a disparity that worsens along racial and geographic lines. Furthermore, these inequities are baked into the data itself Landry et al. (2018) highlighted that patients of African descent are systematically left out of the genomic databases used to drive modern precision medicine.
+Precision oncology has tried to bridge this divide through functional testing, using tools like patient derived xenografts (Gao et al., 2015) and organoid assays (Pauli et al., 2017). The science behind these methods is promising but practical access is restricted to a handful of elite academic medical centers. A patient living in a rural area or relying on a regional hospital rarely has a realistic path to organoid guided care, a disparity that worsens along racial and geographic lines. Furthermore, these inequities are embedded in the data itself. Landry et al. (2018) highlighted that patients of African descent are systematically left out of the genomic databases used to drive modern precision medicine.
 
-This thesis builds on the idea that personalized cancer care should not require access to cutting-edge research facilities. This need is especially urgent now that treatment decisions are being made earlier in the care cycle, before surgical tissue is even available. If the basic clinical data already gathered by everyday oncology practices contains enough of a signal to capture how individual treatment responses differ then developing a causal inference pipeline around those existing variables is a deeply worthwhile pursuit.
+This thesis builds on the premise that personalised cancer care should not depend on access to specialised research infrastructure. This is increasingly salient as treatment decisions are made earlier in the care pathway, often before surgical tissue is available. If routinely collected clinical data contain sufficient signal to capture heterogeneity in treatment response, then developing a causal inference pipeline around these existing variables represents a substantive contribution.
 
 \section{Why existing AI systems fall short}\label{why-existing-ai-systems-fall-short}
 
-Machine learning has made clear strides in predicting ovarian cancer outcomes over the last few years. Tools like XGBoost classifiers, Random Survival Forests, and standard Cox regression models have proven they can group patients into distinct risk categories quite accurately using validation datasets. In fact a few of these models are finally stepping out of the lab and into clinical trials to help screen patients for eligibility.
+Machine learning has made substantial progress in predicting ovarian cancer outcomes. Models including XGBoost classifiers, Random Survival Forests and Cox regression have demonstrated accurate stratification of patients into risk categories in validation studies. Several such models have progressed to prospective evaluation for trial eligibility screening.
 
-The real issue is not the math itself, but how we apply these systems. When a model predicts which patients are likely to live longer, it is answering a completely different question than whether a specific therapy will actually help a specific individual. The first scenario is observational, the second is causal. If we mistake a survival prediction for a guarantee of treatment benefit, we risk introducing severe algorithmic bias. This is exactly the kind of systemic flaw Obermeyer et al. (2019) uncovered when they looked at a massive, widely deployed healthcare risk model that inadvertently penalized vulnerable patient groups.
+The central limitation is not the statistical method itself but its application to causal questions. Predicting which patients are likely to live longer addresses an observational question, whereas determining whether a specific therapy will benefit a particular individual addresses a causal question. Conflating survival prediction with treatment benefit risks severe algorithmic bias, as illustrated by Obermeyer et al. (2019) in a widely deployed healthcare risk model that inadvertently disadvantaged vulnerable patient groups.
 
-Another major hurdle is trust and explainability. Doctors are notoriously slow to adopt AI recommendations and for good reasons. They cannot look under the hood to see how a model reached its conclusion. On top of that, the legal landscape has completely shifted. Under Regulation (EU) 2024/1689---better known as the EU AI Act any AI system used for clinical decision support is now officially labeled a "high-risk" application (European Parliament and Council, 2024). This means developers can no longer just throw a model together. They are legally bound to strict rules regarding data governance, technical documentation, transparency and human oversight not to mention rigorous standards for cybersecurity and robustness. Because most existing clinical AI tools were built before these regulations were finalized, very few of them were actually designed to handle this level of accountability from day one.
+A further barrier concerns trust and explainability. Clinicians are appropriately cautious in adopting algorithmic recommendations when model reasoning is opaque and difficult to interrogate. In parallel, the regulatory environment has undergone substantial change. Under Regulation (EU) 2024/1689, commonly referred to as the EU Artificial Intelligence Act, AI systems intended for clinical decision support are classified as high risk applications (European Parliament and Council, 2024; Hacker et al., 2024). This classification imposes binding requirements relating to data governance, technical documentation, transparency, human oversight, cybersecurity and robustness. Because the majority of existing clinical AI tools were developed prior to the finalisation of these provisions, few were designed to satisfy this level of accountability at inception.
 
 \section{What this thesis contributes}\label{what-this-thesis-contributes}
 
-CaML-OP combines gradient boosted prognostic encoding with causal meta learning to estimate individualized treatment effects (ITE) for platinum chemotherapy from routine clinical data. It first trains an XGBoost survival model. Extracts its leaf structure to capture non-linear patterns and then feeds this into an R-Learner and a Doubly Robust Learner to calculate the final averaged ITE.
+CaML-OP combines gradient boosted prognostic encoding with causal meta learning to estimate individualized treatment effects for platinum chemotherapy from routine clinical data. An XGBoost model is first trained on binary five year survival. Its terminal leaf assignments are extracted to capture nonlinear prognostic structure and subsequently provided as augmented features to an R-Learner and a Doubly Robust Learner. The final estimate is the equally weighted mean of the two causal estimators, which stabilises performance across heterogeneous effect structures.
 
-An explainability layer sits on top. Effect-SHAP isolates the actual causal drivers rather than simple survival predictions. An LLM module translates these metrics into checked clinical summaries.
+An explainability layer complements the estimator. Effect-SHAP attributes variation in the estimated treatment effect function rather than variation in predicted survival, thereby isolating causal drivers. A large language model module translates these quantitative outputs into concise clinical summaries that are subject to automated faithfulness verification prior to display.
 
-The interface design aligns with the EU AI Act\textquotesingle s high risk framework. Features like per-patient explanations and uncertainty reporting act as design responses to the spirit of the regulation. Making the system AI Act-informed rather than legally deployment-ready.
+The interface is designed to be informed by the EU Artificial Intelligence Act high risk framework. Per patient explanations, calibrated uncertainty communication and subgroup reporting are implemented as design responses to the principles of the regulation. The system is therefore AI Act informed rather than legally deployment ready, and no claim of conformity or certification is made.
 
 The remainder of the thesis tests this architecture. A semi-synthetic benchmark pairs real TCGA-OV data with simulated outcomes across four scenarios to evaluate CaML-OP against nine baseline models. Over forty tests are conducted followed by a synthetic verification of statistical consistency.
 
@@ -36,24 +36,24 @@ The main question is whether a hybrid predictive causal pipeline can generate us
 
 \begin{itemize}
 \item
-  \textbf{O1:} Build a causal ITE estimation pipeline on TCGA-OV data that uses XGBoost leaf embeddings as features for R- and DR-Learner estimators. Then validating it via semi-synthetic benchmarks.
+ \textbf{O1:} Build a causal ITE estimation pipeline on TCGA-OV data that uses XGBoost leaf embeddings as features for R- and DR-Learner estimators. Then validating it via semi-synthetic benchmarks.
 \item
-  \textbf{O2:} Benchmark CaML-OP against three binary outcome predictive models and five causal meta-learners to evaluate ITE accuracy and off policy value.
+ \textbf{O2:} Benchmark CaML-OP against three binary outcome predictive models and five causal meta-learners to evaluate ITE accuracy and off policy value.
 \item
-  \textbf{O3:} Deploy an Effect-SHAP attribution layer and an LLM narrative module with automated accuracy checks.
+ \textbf{O3:} Deploy an Effect-SHAP attribution layer and an LLM narrative module with automated accuracy checks.
 \item
-  \textbf{O4:} Show end-to-end functionality through a dashboard prototype featuring subgroup error reporting and a built-in transparency card.
+ \textbf{O4:} Show end-to-end functionality through a dashboard prototype featuring subgroup error reporting and a built-in transparency card.
 \end{itemize}
 
 \textbf{1.4.2 Secondary Questions}
 
 \begin{itemize}
 \item
-  \textbf{RQ1:} How varied are the estimated platinum therapy effects across subgroups (age, FIGO stage, race), and which covariates drive treatment benefit the most?
+ \textbf{RQ1:} How varied are the estimated platinum therapy effects across subgroups (age, FIGO stage, race), and which covariates drive treatment benefit the most?
 \item
-  \textbf{RQ2:} Can LLM-generated summaries stay entirely faithful to underlying numeric causal data while remaining easy for clinicians to read?
+ \textbf{RQ2:} Can LLM-generated summaries stay entirely faithful to underlying numeric causal data while remaining easy for clinicians to read?
 \item
-  \textbf{RQ3:} Are there noticeable differences in ITE estimation errors across demographic subgroups on this benchmark that require deeper investigation?
+ \textbf{RQ3:} Are there noticeable differences in ITE estimation errors across demographic subgroups on this benchmark that require deeper investigation?
 \end{itemize}
 
 \section{Thesis structure}\label{thesis-structure}
@@ -101,12 +101,12 @@ CaML-OP is positioned differently: it accepts lower expected accuracy in exchang
 Table 2.1 compares CaML-OP to the most relevant prior work. CaML-OP does not achieve the lowest PEHE on clean benchmarks; that distinction goes to the Causal Forest or S-Learner in some scenarios. It also does not exploit the richest available data; the Kilim et al. (2025) multimodal approach uses more information than CaML-OP can. The gap CaML-OP addresses is the intersection of causal estimation, causal explainability, and EU AI Act-informed design on routinely collected data.
 
 \begin{longtable}[]{@{}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 10\tabcolsep) * \real{0.3483}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 10\tabcolsep) * \real{0.0962}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 10\tabcolsep) * \real{0.0962}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 10\tabcolsep) * \real{0.2030}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 10\tabcolsep) * \real{0.1389}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 10\tabcolsep) * \real{0.1175}}@{}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 10\tabcolsep) * \real{0.3483}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 10\tabcolsep) * \real{0.0962}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 10\tabcolsep) * \real{0.0962}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 10\tabcolsep) * \real{0.2030}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 10\tabcolsep) * \real{0.1389}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 10\tabcolsep) * \real{0.1175}}@{}}
 \toprule\noalign{}
 \begin{minipage}[b]{\linewidth}\raggedright
 \textbf{Method}
@@ -179,9 +179,9 @@ After training, leaf indices are extracted per tree and one-hot encoded. The res
 
 \subsection{Identification assumptions}\label{identification-assumptions}
 
-Three assumptions are required. Conditional unconfoundedness states that, given the five covariates, treatment assignment is independent of potential outcomes. This is the assumption that requires the most caution. TCGA-OV does not record performance status, comorbidities or physician preference, each of which likely affects both treatment assignment and survival. The causal estimates in this thesis are conditional on this assumption holding, and it almost certainly does not hold perfectly.
+Three assumptions are required for identification (Imbens and Rubin, 2015; Pearl, 2009). Conditional unconfoundedness states that, given the five observed covariates, treatment assignment is independent of potential outcomes. This assumption requires the greatest caution. TCGA-OV does not record performance status, comorbidities or physician preference, each of which plausibly affects both treatment assignment and survival. The causal estimates in this thesis are therefore conditional on an assumption that almost certainly does not hold exactly, and sensitivity to hidden confounding is examined via E-values (VanderWeele and Ding, 2017) and discussed in relation to ignorance intervals (Jesson et al., 2021) and quasi-oracle bounds (Oprescu et al., 2023). Consistent with double machine learning recommendations for Neyman orthogonal estimation (Chernozhukov et al., 2018), all nuisance functions are estimated with cross fitting.
 
-Overlap requires that every patient has positive probability of receiving either treatment given their covariates; this is enforced empirically through propensity trimming. SUTVA requires that no patient\textquotesingle s outcome depends on another patient\textquotesingle s treatment assignment; this is reasonable for individual cancer treatment decisions.
+Overlap requires that every patient has positive probability of receiving either treatment conditional on covariates. This is enforced empirically through propensity trimming at 0.05 and 0.95, following best practice for finite sample overlap diagnostics (Kallus, 2020). The Stable Unit Treatment Value Assumption requires that no patient outcome depends on another patient treatment assignment, which is credible for individual cancer treatment decisions.
 
 \begin{figure}[H]
 \centering
@@ -207,7 +207,7 @@ and regresses them on X\_i. The double-robustness property holds if either the o
 
 \subsection{Ensemble and uncertainty reporting}\label{ensemble-and-uncertainty-reporting}
 
-The final estimate is the equal-weighted mean: tau-hat\_ensemble(x) = 0.5 * tau-hat\_R(x) + 0.5 * tau-hat\_DR(x). The R-Learner does not produce native intervals, so CaML-OP reports an approximate patient-level uncertainty interval derived from the ForestDRLearner half-width and expanded heuristically by 10\% to reflect additional ensemble variance. This interval is informative but not a formally derived 95\% confidence interval for the ensemble itself; it is referred to throughout as an approximate uncertainty interval rather than as a native CI. Chapter 5 reports its empirical coverage against the known tau values (0.847 against a nominal 0.95 target), and this under-coverage should be borne in mind when interpreting the intervals.
+The final estimate is the equally weighted mean: tau-hat\_ensemble(x) = 0.5 * tau-hat\_R(x) + 0.5 * tau-hat\_DR(x). The R-Learner does not produce native intervals, so CaML-OP reports an approximate patient level uncertainty interval derived from the ForestDRLearner half width and expanded heuristically by 10 percent to reflect additional ensemble variance. This interval is informative but not a formally derived confidence interval for the ensemble itself; it is referred to throughout as an approximate uncertainty interval rather than a native interval. The factor of 1.10 is a provisional convention and has not been calibrated to achieve nominal coverage. Chapter 5 reports empirical coverage of 0.847 against a nominal 0.95 target. The interval should therefore be interpreted as an approximate uncertainty interval with known under coverage, consistent with recent findings that naive conformal constructions can be optimistic without explicit calibration (Barber et al., 2023; Lei and Candes, 2021). Reporting follows the transparency obligations for high risk AI systems and the reporting standards for clinical prediction models (Collins et al., 2024).
 
 \section{Explainability layer}\label{explainability-layer}
 
@@ -223,15 +223,15 @@ Five automated checks gate a narrative before display, extending the three origi
 
 \begin{itemize}
 \item
-  \textbf{Sign.} The declared recommendation sign must match sign(tau-hat), or must be \textquotesingle indeterminate\textquotesingle{} when the calibration check below finds the sign is not statistically distinguishable from zero.
+ \textbf{Sign.} The declared recommendation sign must match sign(tau-hat), or must be \textquotesingle indeterminate\textquotesingle{} when the calibration check below finds the sign is not statistically distinguishable from zero.
 \item
-  \textbf{Features.} Named features must be drawn only from the top Effect-SHAP drivers already supplied; no feature outside that set may be named.
+ \textbf{Features.} Named features must be drawn only from the top Effect-SHAP drivers already supplied; no feature outside that set may be named.
 \item
-  \textbf{Numeric fidelity.} Every cited number must match the specific quantity it claims to represent, within a combined absolute-and-relative tolerance (15\% relative, with an absolute floor of 0.005 to avoid an unreasonably tight bound near tau-hat approx 0). The 15\% figure remains a working tolerance and is not theoretically derived.
+ \textbf{Numeric fidelity.} Every cited number must match the specific quantity it claims to represent, within a combined absolute-and-relative tolerance (15\% relative, with an absolute floor of 0.005 to avoid an unreasonably tight bound near tau-hat approx 0). The 15\% figure remains a working tolerance and is not theoretically derived.
 \item
-  \textbf{Counterfactual consistency.} The narrative must cite both arm-level outcome estimates, and a \textquotesingle benefit\textquotesingle{} claim requires the treated-arm estimate to exceed the untreated-arm estimate (and the reverse for \textquotesingle harm\textquotesingle ). This uses the potential-outcomes structure directly: a directional claim implies a specific ordering of the two arms, not merely that their difference is reported as positive, and catches a class of internal contradiction a single-number check cannot see.
+ \textbf{Counterfactual consistency.} The narrative must cite both arm-level outcome estimates, and a \textquotesingle benefit\textquotesingle{} claim requires the treated-arm estimate to exceed the untreated-arm estimate (and the reverse for \textquotesingle harm\textquotesingle ). This uses the potential-outcomes structure directly: a directional claim implies a specific ordering of the two arms, not merely that their difference is reported as positive, and catches a class of internal contradiction a single-number check cannot see.
 \item
-  \textbf{Dominant uncertainty source.} The narrative must name whichever of three structurally distinct sources is largest for this patient: sampling uncertainty (interval width), model-form disagreement (\textbar tau-hat\_R - tau-hat\_DR\textbar , reflecting sensitivity to which nuisance model is trusted), or identification fragility (an E-value; see below). Synthesising across several continuous signals into one prioritised statement is a task a fixed template cannot scale to gracefully across every combination of which signal is largest, but is checked here against a deterministic ranking rather than left to the model\textquotesingle s own judgement.
+ \textbf{Dominant uncertainty source.} The narrative must name whichever of three structurally distinct sources is largest for this patient: sampling uncertainty (interval width), model-form disagreement (\textbar tau-hat\_R - tau-hat\_DR\textbar , reflecting sensitivity to which nuisance model is trusted), or identification fragility (an E-value; see below). Synthesising across several continuous signals into one prioritised statement is a task a fixed template cannot scale to gracefully across every combination of which signal is largest, but is checked here against a deterministic ranking rather than left to the model\textquotesingle s own judgement.
 \end{itemize}
 
 A narrative failing any check is returned to the model with the specific failing check named, for up to two further attempts; a narrative still failing after three total attempts is marked for escalation to a human reviewer rather than displayed.
@@ -266,13 +266,13 @@ The four scenarios form a complexity ladder following Curth et al. (2021a) with 
 
 \begin{itemize}
 \item
-  \textbf{Scenario 1 (constant):} tau(X) = 0.5 for all patients. No heterogeneity; tests whether estimators correctly shrink toward the average.
+ \textbf{Scenario 1 (constant):} tau(X) = 0.5 for all patients. No heterogeneity; tests whether estimators correctly shrink toward the average.
 \item
-  \textbf{Scenario 2 (linear):} tau(X) = alpha\_1 * age + alpha\_2 * stage, with coefficients drawn once from N(0, 0.4).
+ \textbf{Scenario 2 (linear):} tau(X) = alpha\_1 * age + alpha\_2 * stage, with coefficients drawn once from N(0, 0.4).
 \item
-  \textbf{Scenario 3 (nonlinear):} tau(X) = gamma * sigma(beta\_1\textquotesingle{} X) - 0.5, introducing both positive and negative ITEs.
+ \textbf{Scenario 3 (nonlinear):} tau(X) = gamma * sigma(beta\_1\textquotesingle{} X) - 0.5, introducing both positive and negative ITEs.
 \item
-  \textbf{Scenario 4 (interaction):} tau(X) = gamma * sigma(beta\_1\textquotesingle{} X) - 0.5 + delta * age * stage. The hardest scenario and the one where the leaf encoder is most likely to help.
+ \textbf{Scenario 4 (interaction):} tau(X) = gamma * sigma(beta\_1\textquotesingle{} X) - 0.5 + delta * age * stage. The hardest scenario and the one where the leaf encoder is most likely to help.
 \end{itemize}
 
 \begin{figure}[H]
@@ -289,15 +289,15 @@ The data source is The Cancer Genome Atlas - Ovarian Serous Cystadenocarcinoma (
 
 \begin{itemize}
 \item
-  \textbf{Initial pull.} Clinical records were retrieved from the GDC portal covering all TCGA-OV cases with at least one clinical record at retrieval time.
+ \textbf{Initial pull.} Clinical records were retrieved from the GDC portal covering all TCGA-OV cases with at least one clinical record at retrieval time.
 \item
-  \textbf{Outcome filter.} Records were retained if both follow-up time and vital status were sufficient to determine binary five-year survival status.
+ \textbf{Outcome filter.} Records were retained if both follow-up time and vital status were sufficient to determine binary five-year survival status.
 \item
-  \textbf{Treatment filter.} Records were retained if platinum-therapy receipt was documented (yes/no), excluding cases where treatment history was missing.
+ \textbf{Treatment filter.} Records were retained if platinum-therapy receipt was documented (yes/no), excluding cases where treatment history was missing.
 \item
-  \textbf{Covariate completeness filter.} Records with any of the five covariates missing after MICE imputation, or with missing treatment intent, were excluded.
+ \textbf{Covariate completeness filter.} Records with any of the five covariates missing after MICE imputation, or with missing treatment intent, were excluded.
 \item
-  \textbf{Final sample:} n = 547 patients with complete covariates, documented platinum-therapy status, and binary five-year survival outcome. Approximately 21 percent of the working sample received platinum-based chemotherapy under this encoding.
+ \textbf{Final sample:} n = 547 patients with complete covariates, documented platinum-therapy status, and binary five-year survival outcome. Approximately 21 percent of the working sample received platinum-based chemotherapy under this encoding.
 \end{itemize}
 
 \begin{figure}[H]
@@ -311,10 +311,10 @@ The covariate set is intentionally small. Five clinical features: age, FIGO stag
 \setcounter{table}{0}\captionof{table}{TCGA-OV variables used in CaML-OP after cleaning.}
 
 \begin{longtable}[]{@{}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2350}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.4487}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.1816}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.1346}}@{}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2350}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.4487}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.1816}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.1346}}@{}}
 \toprule\noalign{}
 \begin{minipage}[b]{\linewidth}\raggedright
 \textbf{Variable}
@@ -351,9 +351,9 @@ Three binary-outcome predictive comparators (a fixed-horizon Cox PH adaptation, 
 \setcounter{table}{1}\captionof{table}{Baseline methods grouped by type.}
 
 \begin{longtable}[]{@{}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 4\tabcolsep) * \real{0.1923}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 4\tabcolsep) * \real{0.2350}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 4\tabcolsep) * \real{0.5726}}@{}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 4\tabcolsep) * \real{0.1923}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 4\tabcolsep) * \real{0.2350}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 4\tabcolsep) * \real{0.5726}}@{}}
 \toprule\noalign{}
 \begin{minipage}[b]{\linewidth}\raggedright
 \textbf{Method}
@@ -385,9 +385,9 @@ Five metric families are reported. PEHE, MAE and ATE error measure ITE accuracy 
 \setcounter{table}{2}\captionof{table}{Evaluation metrics.}
 
 \begin{longtable}[]{@{}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 4\tabcolsep) * \real{0.2137}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 4\tabcolsep) * \real{0.3419}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 4\tabcolsep) * \real{0.4444}}@{}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 4\tabcolsep) * \real{0.2137}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 4\tabcolsep) * \real{0.3419}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 4\tabcolsep) * \real{0.4444}}@{}}
 \toprule\noalign{}
 \begin{minipage}[b]{\linewidth}\raggedright
 \textbf{Metric}
@@ -437,10 +437,10 @@ Table 5.1 reports mean PEHE, MAE and ATE error pooled over all four scenarios an
 \setcounter{table}{0}\captionof{table}{Mean PEHE, MAE and ATE error pooled over 4 DGP scenarios x 10 runs (n\_test approximately 137 per run). Methods sorted by PEHE.}
 
 \begin{longtable}[]{@{}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2564}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2479}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2479}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2479}}@{}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2564}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2479}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2479}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2479}}@{}}
 \toprule\noalign{}
 \begin{minipage}[b]{\linewidth}\raggedright
 \textbf{Method}
@@ -469,11 +469,11 @@ Table 5.2 breaks the pooled PEHE down by scenario. The S-Learner is best in thre
 \setcounter{table}{1}\captionof{table}{Per-scenario PEHE (mean over 10 runs per scenario). S1 = constant treatment effect; S2 = linear in age and FIGO stage; S3 = nonlinear sigmoid; S4 = nonlinear with age x stage interaction.}
 
 \begin{longtable}[]{@{}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 8\tabcolsep) * \real{0.2564}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 8\tabcolsep) * \real{0.1859}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 8\tabcolsep) * \real{0.1859}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 8\tabcolsep) * \real{0.1859}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 8\tabcolsep) * \real{0.1859}}@{}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 8\tabcolsep) * \real{0.2564}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 8\tabcolsep) * \real{0.1859}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 8\tabcolsep) * \real{0.1859}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 8\tabcolsep) * \real{0.1859}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 8\tabcolsep) * \real{0.1859}}@{}}
 \toprule\noalign{}
 \begin{minipage}[b]{\linewidth}\raggedright
 \textbf{Method}
@@ -516,9 +516,9 @@ Table 5.3 reports off-policy AIPW estimated value. CaML-OP attains the highest m
 \setcounter{table}{2}\captionof{table}{Off-policy estimated AIPW value of policy pi(X) = 1\{tau-hat(X) \textgreater{} 0\}, pooled over 4 scenarios x 10 runs, using the doubly-robust augmented estimator (Dud\'{i}k, Langford and Li, 2011). Higher is better. Oracle benchmark = 0.574. Standard deviation across 40 runs reported.}
 
 \begin{longtable}[]{@{}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 4\tabcolsep) * \real{0.4274}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 4\tabcolsep) * \real{0.2863}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 4\tabcolsep) * \real{0.2863}}@{}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 4\tabcolsep) * \real{0.4274}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 4\tabcolsep) * \real{0.2863}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 4\tabcolsep) * \real{0.2863}}@{}}
 \toprule\noalign{}
 \begin{minipage}[b]{\linewidth}\raggedright
 \textbf{Method}
@@ -556,10 +556,10 @@ The fixed-horizon Cox PH adaptation achieves AUC 0.736, the highest among the th
 \setcounter{table}{3}\captionof{table}{Binary-outcome predictive comparators: AUC, AUPRC, Brier score (mean over 4 scenarios x 10 runs). Lower Brier is better; higher AUC and AUPRC are better.}
 
 \begin{longtable}[]{@{}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.3526}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2158}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2158}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2158}}@{}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.3526}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2158}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2158}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2158}}@{}}
 \toprule\noalign{}
 \begin{minipage}[b]{\linewidth}\raggedright
 \textbf{Method}
@@ -594,10 +594,10 @@ Both methods under-cover relative to the 95\% nominal target. The Causal Forest 
 \setcounter{table}{4}\captionof{table}{Empirical coverage of the reported 95\%-nominal-target intervals on the TCGA-OV semi-synthetic test set (n\_test approximately 137 per run, pooled over 4 scenarios x 10 runs). Coverage = fraction of true tau values inside the reported interval. SD = standard deviation across 40 runs. Mean width = average interval width across the test set. Nominal target = 0.95.}
 
 \begin{longtable}[]{@{}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.3571}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2143}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2143}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2143}}@{}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.3571}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2143}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2143}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2143}}@{}}
 \toprule\noalign{}
 \begin{minipage}[b]{\linewidth}\raggedright
 \textbf{Method}
@@ -631,14 +631,14 @@ This finding should not be read as establishing fairness in any broad regulatory
 \setcounter{table}{5}\captionof{table}{Subgroup PEHE by age band, FIGO stage, and race grouping (mean over 4 scenarios x 10 runs). Subgroup definitions: age \textless50, 50-65, \textgreater=65; stage Low/High split at median; race Majority/Minority based on most common category versus all others.}
 
 \begin{longtable}[]{@{}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 14\tabcolsep) * \real{0.1934}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 14\tabcolsep) * \real{0.1172}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 14\tabcolsep) * \real{0.1171}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 14\tabcolsep) * \real{0.1173}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 14\tabcolsep) * \real{0.1174}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 14\tabcolsep) * \real{0.1175}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 14\tabcolsep) * \real{0.1173}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 14\tabcolsep) * \real{0.1028}}@{}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 14\tabcolsep) * \real{0.1934}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 14\tabcolsep) * \real{0.1172}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 14\tabcolsep) * \real{0.1171}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 14\tabcolsep) * \real{0.1173}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 14\tabcolsep) * \real{0.1174}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 14\tabcolsep) * \real{0.1175}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 14\tabcolsep) * \real{0.1173}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 14\tabcolsep) * \real{0.1028}}@{}}
 \toprule\noalign{}
 \begin{minipage}[b]{\linewidth}\raggedright
 \textbf{Method}
@@ -678,17 +678,17 @@ DR-Learner & 0.280 & 0.230 & 0.289 & 0.271 & 0.262 & 0.261 & 0.275 \\
 
 \section{Synthetic verification}\label{synthetic-verification-1}
 
-\subsection{Check 1 - Correctness}\label{check-1---correctness}
+\subsection{Check 1: Correctness}\label{check-1-correctness}
 
 At N = 2000 and standard confounding (eta = 1), the pass criterion is PEHE below std(tau\_true) = 0.097. Table 5.7 shows that S-Learner, X-Learner and Causal Forest pass (PEHE 0.091, 0.106 and 0.113 respectively). CaML-OP reaches 0.128, above the threshold. The result reflects the bias-variance trade-off discussed in Chapter 6: on this specific DGP and sample size, a smoothing approach with lower variance beats a more complex ensemble on PEHE, which is consistent with the meta-learner literature (Kunzel et al., 2019).
 
 \setcounter{table}{6}\captionof{table}{Synthetic Check 1 - architectural correctness. N = 2000, 8 runs, Scenario 4, standard confounding (eta = 1). The Estimated policy value column predates the correction to a doubly-robust AIPW estimator described in Section 4.4 and Section 5.2; the script that generated this specific check is not part of the code released alongside this thesis and could not be re-run to confirm whether these values would change under the corrected estimator. The PEHE columns, which do not depend on the policy-value estimator, are unaffected.}
 
 \begin{longtable}[]{@{}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.3205}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2265}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2265}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2265}}@{}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.3205}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2265}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2265}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2265}}@{}}
 \toprule\noalign{}
 \begin{minipage}[b]{\linewidth}\raggedright
 \textbf{Method}
@@ -712,17 +712,17 @@ DR-Learner & 0.143 & 0.011 & 0.525 \\
 T-Learner & 0.155 & 0.007 & 0.519 \\
 \end{longtable}
 
-\subsection{Check 2 - Competitiveness under strong confounding}\label{check-2---competitiveness-under-strong-confounding}
+\subsection{Check 2: Competitiveness under strong confounding}\label{check-2-competitiveness-under-strong-confounding}
 
 When confounding is doubled (eta = 2), CaML-OP achieves PEHE 0.159, below T-Learner (0.161), DR-Learner alone (0.166) and R-Learner (0.176). The S-Learner remains hardest to beat at 0.092. Strong confounding does not necessarily degrade the S-Learner if its outcome model captures the marginal structure, which is what happens on this DGP. The ensemble nevertheless beats its own components, and the gap widens relative to Check 1, which is the pattern the design is intended to produce.
 
 \setcounter{table}{7}\captionof{table}{Synthetic Check 2 - competitiveness under strong confounding. N = 2000, 8 runs, Scenario 4, doubled confounding (eta = 2). As in Table 5.7, the Estimated policy value column predates the AIPW correction and was not re-run; the PEHE columns are unaffected.}
 
 \begin{longtable}[]{@{}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.3205}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2265}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2265}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2265}}@{}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.3205}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2265}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2265}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.2265}}@{}}
 \toprule\noalign{}
 \begin{minipage}[b]{\linewidth}\raggedright
 \textbf{Method}
@@ -752,18 +752,18 @@ R-Learner & 0.176 & 0.017 & 0.525 \\
 \caption{Two-panel comparison of synthetic Checks 1 and 2. Left panel (Check 1): standard confounding; horizontal dashed line marks the std(tau\_true) = 0.097 pass threshold. Right panel (Check 2): doubled confounding. Bars sorted by PEHE within each panel. Error bars are standard errors over 8 runs.}
 \end{figure}
 
-\subsection{Check 3 -- Consistency}\label{check-3-consistency}
+\subsection{Check 3: Consistency}\label{check-3-consistency}
 
 Table 5.9 reports mean PEHE at N in \{500, 1000, 2000, 4000\} for five seeds each. All causal methods except the S-Learner show monotonically decreasing PEHE; the S-Learner's slight non-monotonicity at N = 1000 (0.103 versus 0.101 at N = 500) is within run-to-run variation. CaML-OP decreases from 0.238 at N = 500 to 0.107 at N = 4000, a 55 percent reduction. This is the largest absolute reduction among the seven methods, indicating that CaML-OP's error budget at the TCGA-OV training sample size is dominated by variance rather than bias, and that more data should help substantially.
 
-\setcounter{table}{8}\captionof{table}{Synthetic Check 3 -- statistical consistency. Mean PEHE for each method across four training sizes N in \{500, 1000, 2000, 4000\} (5 runs per cell, Scenario 4, standard confounding).}
+\setcounter{table}{8}\captionof{table}{Synthetic Check 3: statistical consistency. Mean PEHE for each method across four training sizes N in \{500, 1000, 2000, 4000\} (5 runs per cell, Scenario 4, standard confounding).}
 
 \begin{longtable}[]{@{}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 8\tabcolsep) * \real{0.3205}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 8\tabcolsep) * \real{0.1699}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 8\tabcolsep) * \real{0.1699}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 8\tabcolsep) * \real{0.1699}}
-  >{\raggedright\arraybackslash}p{(\columnwidth - 8\tabcolsep) * \real{0.1699}}@{}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 8\tabcolsep) * \real{0.3205}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 8\tabcolsep) * \real{0.1699}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 8\tabcolsep) * \real{0.1699}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 8\tabcolsep) * \real{0.1699}}
+ >{\raggedright\arraybackslash}p{(\columnwidth - 8\tabcolsep) * \real{0.1699}}@{}}
 \toprule\noalign{}
 \begin{minipage}[b]{\linewidth}\raggedright
 \textbf{Method}
@@ -799,17 +799,17 @@ DR-Learner & 0.292 & 0.204 & 0.140 & 0.116 \\
 
 \begin{itemize}
 \item
-  \textbf{ITE accuracy.} CaML-OP ranks 3rd of 7 on PEHE (0.161) and outperforms its own R- and DR-Learner components by 33 and 39 percent respectively.
+ \textbf{ITE accuracy.} CaML-OP ranks 3rd of 7 on PEHE (0.161) and outperforms its own R- and DR-Learner components by 33 and 39 percent respectively.
 \item
-  \textbf{Estimated policy quality.} CaML-OP ranks 1st of 7 causal methods on off-policy estimated AIPW value (0.569), second overall behind the oracle benchmark (0.574). Under this estimator, CaML-OP\textquotesingle s value is not statistically distinguishable from the oracle benchmark (Wilcoxon p = 0.88). PEHE rank does not predict estimated-value rank.
+ \textbf{Estimated policy quality.} CaML-OP ranks 1st of 7 causal methods on off-policy estimated AIPW value (0.569), second overall behind the oracle benchmark (0.574). Under this estimator, CaML-OP\textquotesingle s value is not statistically distinguishable from the oracle benchmark (Wilcoxon p = 0.88). PEHE rank does not predict estimated-value rank.
 \item
-  \textbf{Scenario stability.} Only method with PEHE below 0.17 in every one of the four DGP scenarios.
+ \textbf{Scenario stability.} Only method with PEHE below 0.17 in every one of the four DGP scenarios.
 \item
-  \textbf{Uncertainty reporting.} Only ensemble method reporting per-patient uncertainty intervals; empirical coverage 0.847 against a 0.95 nominal target. The interval is approximate rather than a formal CI for the ensemble.
+ \textbf{Uncertainty reporting.} Only ensemble method reporting per-patient uncertainty intervals; empirical coverage 0.847 against a 0.95 nominal target. The interval is approximate rather than a formal CI for the ensemble.
 \item
-  \textbf{Subgroup error.} Subgroup PEHE range 0.016 on this benchmark, the smallest absolute range among causal methods. Not a complete fairness audit.
+ \textbf{Subgroup error.} Subgroup PEHE range 0.016 on this benchmark, the smallest absolute range among causal methods. Not a complete fairness audit.
 \item
-  \textbf{Architecture.} Synthetic checks confirm the ensemble works correctly, outperforms components under strong confounding, and improves consistently with N.
+ \textbf{Architecture.} Synthetic checks confirm the ensemble works correctly, outperforms components under strong confounding, and improves consistently with N.
 \end{itemize}
 
 \section{Statistical significance}\label{statistical-significance}
@@ -846,17 +846,17 @@ The XGBoost leaf encoder\textquotesingle s specific contribution is harder to is
 
 \section{Answering the research questions}\label{answering-the-research-questions}
 
-\subsection{RQ1 - Heterogeneity of platinum effects}\label{rq1---heterogeneity-of-platinum-effects}
+\subsection{RQ1: Heterogeneity of platinum effects}\label{rq1, heterogeneity-of-platinum-effects}
 
 RQ1 asks how heterogeneous platinum effects are and which covariates drive the heterogeneity. Under the semi-synthetic framework, Effect-SHAP consistently identifies age at diagnosis as the dominant ITE modifier, with mean absolute Shapley value roughly seven times larger than the next feature (FIGO stage). This aligns with the clinical literature: Hanker et al. (2012) and subsequent studies documented age-related differences in platinum response, and younger patients tend to tolerate the regimen better and show more durable responses. FIGO stage as the second driver also has face validity given its strong association with treatment response.
 
 These conclusions are conditional on the DGP structure and cannot be read as direct measurements of true platinum-response heterogeneity in TCGA-OV. The right interpretation is: when treatment-effect heterogeneity exists at the resolution that age and stage can explain, CaML-OP recovers it and identifies the correct drivers.
 
-\subsection{RQ2 - LLM narrative fidelity}\label{rq2---llm-narrative-fidelity}
+\subsection{RQ2: LLM narrative fidelity}\label{rq2, llm-narrative-fidelity}
 
-RQ2 asks whether LLM summaries can remain faithful to causal model outputs while being clinically readable. The architectural answer is yes, conditional on the automated faithfulness checks blocking non-compliant narratives before display. Beyond the three checks originally specified, the implemented module also verifies that a directional claim is consistent with the underlying potential-outcomes structure (the treated- and untreated-arm estimates must be ordered consistently with the claimed sign) and that the narrative correctly identifies which of three structurally distinct sources -- sampling noise, disagreement between the R- and DR-Learner components, or identification fragility via an E-value -- dominates the uncertainty for that patient. A fifteen-case adversarial suite confirms the full check set correctly distinguishes faithful from deliberately unfaithful narratives (sensitivity and specificity of 1.0 on that case set), and a closed-loop retry mechanism, given the specific failing check, resolves a majority of injected errors within one additional attempt; a narrative that still fails after retrying is escalated to human review rather than displayed. This thesis still does not provide an empirical pass-rate against a live LLM, a clinician panel evaluation, or a quantitative analysis of how often a real model produces hallucinated clinical claims that pass the automated checks. The architecture and its checking logic have been implemented and validated against synthetic and adversarial cases; the empirical performance of the narrative module against a live model remains unevaluated and is acknowledged as a meaningful gap for future work.
+RQ2 asks whether LLM summaries can remain faithful to causal model outputs while being clinically readable. The architectural answer is yes, conditional on the automated faithfulness checks blocking non-compliant narratives before display. Beyond the three checks originally specified, the implemented module also verifies that a directional claim is consistent with the underlying potential-outcomes structure (the treated- and untreated-arm estimates must be ordered consistently with the claimed sign) and that the narrative correctly identifies which of three structurally distinct sources, namely sampling noise, disagreement between the R- and DR-Learner components, or identification fragility via an E-value, dominates the uncertainty for that patient. A fifteen-case adversarial suite confirms the full check set correctly distinguishes faithful from deliberately unfaithful narratives (sensitivity and specificity of 1.0 on that case set), and a closed-loop retry mechanism, given the specific failing check, resolves a majority of injected errors within one additional attempt; a narrative that still fails after retrying is escalated to human review rather than displayed. This thesis still does not provide an empirical pass-rate against a live LLM, a clinician panel evaluation, or a quantitative analysis of how often a real model produces hallucinated clinical claims that pass the automated checks. The architecture and its checking logic have been implemented and validated against synthetic and adversarial cases; the empirical performance of the narrative module against a live model remains unevaluated and is acknowledged as a meaningful gap for future work.
 
-\subsection{RQ3 - Fairness across subgroups}\label{rq3---fairness-across-subgroups}
+\subsection{RQ3: Fairness across subgroups}\label{rq3, fairness-across-subgroups}
 
 RQ3 asks whether there are observable differences in ITE estimation error across demographic subgroups that warrant further investigation. The answer from Table 5.6 is that no large disparity was observed on this benchmark. The CaML-OP subgroup PEHE range is 0.016. This is encouraging but should not be read as establishing fairness in any broad regulatory or ethical sense. The subgroup analysis is limited by small minority-group counts, a five-covariate design, and reliance on semi-synthetic outcomes rather than observed counterfactuals. Treatment-recommendation parity, calibration parity across subgroups, and the broader set of checks expected in a high-risk AI fairness audit are not provided here.
 
@@ -874,19 +874,19 @@ Fourth, the decision to scope the narrative module to closed, checkable claims r
 
 \begin{itemize}
 \item
-  \textbf{Unmeasured confounding.} Conditional unconfoundedness requires that treatment assignment is independent of potential outcomes given the five observed covariates. Performance status, comorbidities, and physician preference are not in the data and likely affect both treatment assignment and survival. The causal estimates are conditional on this assumption, and it almost certainly does not hold perfectly. The narrative module\textquotesingle s per-patient E-value (Section 3.6.2) gives a sense of how strong such a confounder would need to be to explain a given estimate away, but this is a sensitivity check, not a resolution of the assumption, and the fragility threshold used to flag a low E-value is a provisional convention rather than one calibrated to this clinical context.
+ \textbf{Unmeasured confounding.} Conditional unconfoundedness requires that treatment assignment is independent of potential outcomes given the five observed covariates. Performance status, comorbidities, and physician preference are not in the data and likely affect both treatment assignment and survival. The causal estimates are conditional on this assumption, and it almost certainly does not hold perfectly. The narrative module\textquotesingle s per-patient E-value (Section 3.6.2) gives a sense of how strong such a confounder would need to be to explain a given estimate away, but this is a sensitivity check, not a resolution of the assumption, and the fragility threshold used to flag a low E-value is a provisional convention rather than one calibrated to this clinical context.
 \item
-  \textbf{Semi-synthetic evaluation.} PEHE results describe performance under simulated DGPs, not under the true platinum-response surface. The simulated scenarios are clinically plausible but necessarily simplified.
+ \textbf{Semi-synthetic evaluation.} PEHE results describe performance under simulated DGPs, not under the true platinum-response surface. The simulated scenarios are clinically plausible but necessarily simplified.
 \item
-  \textbf{Binary treatment.} Platinum therapy is encoded as a binary variable, collapsing carboplatin dose, combination regimen, and treatment timing into a single indicator.
+ \textbf{Binary treatment.} Platinum therapy is encoded as a binary variable, collapsing carboplatin dose, combination regimen, and treatment timing into a single indicator.
 \item
-  \textbf{Temporal coverage.} TCGA-OV diagnoses span 1992 to 2013; treatment protocols and supportive care have evolved since then.
+ \textbf{Temporal coverage.} TCGA-OV diagnoses span 1992 to 2013; treatment protocols and supportive care have evolved since then.
 \item
-  \textbf{Interval under-coverage.} Empirical coverage of 0.847 against a 0.95 nominal target means the reported intervals are optimistic. The reported interval is an approximate uncertainty interval rather than a formal CI for the ensemble. The narrative module\textquotesingle s calibrated abstention mechanism (Section 3.6.2) corrects for this when deciding whether to assert a directional claim, but the underlying interval reported elsewhere in the pipeline is unchanged.
+ \textbf{Interval under-coverage.} Empirical coverage of 0.847 against a 0.95 nominal target means the reported intervals are optimistic. The reported interval is an approximate uncertainty interval rather than a formal CI for the ensemble. The narrative module\textquotesingle s calibrated abstention mechanism (Section 3.6.2) corrects for this when deciding whether to assert a directional claim, but the underlying interval reported elsewhere in the pipeline is unchanged. The accompanying NeurIPS study implements the same interval through an explicit split conformal calibration on held out calibration data with known semi synthetic effects, achieving nominal coverage at the cost of near total abstention at the 0.95 target; that calibration is evaluation only and not transferable to clinical deployment, but it quantifies the informativeness cost of honest coverage.
 \item
-  \textbf{Encoder leakage.} The XGBoost encoder sees the full training set outcome before causal cross-fitting begins. Cross-fitting mitigates but does not eliminate the resulting leakage.
+ \textbf{Encoder leakage.} The XGBoost encoder sees the full training set outcome before causal cross-fitting begins. Cross-fitting mitigates but does not eliminate the resulting leakage. A follow up protocol implemented in the accompanying NeurIPS study isolates this effect by comparing raw covariates, the leaky encoder and a five fold cross fitted encoder on the same semi synthetic cohorts: the leaky encoder improves PEHE by 7.4 percent over raw covariates whereas the cross fitted encoder improves by 47.4 percent. The thesis benchmark therefore likely understates the achievable gain from a leakage free representation. All PEHE rankings reported in Chapter 5 should be read conditional on this protocol choice.
 \item
-  \textbf{LLM narrative empirical evaluation.} The narrative module\textquotesingle s architecture, including the counterfactual-consistency and dominant-uncertainty checks, has been implemented and validated against a synthetic adversarial suite, but no pass-rate, failure-rate or clinician evaluation against a live LLM is reported. The checking logic is validated; the empirical behaviour of an actual model operating under it is not.
+ \textbf{LLM narrative empirical evaluation.} The narrative module\textquotesingle s architecture, including the counterfactual-consistency and dominant-uncertainty checks, has been implemented and validated against a synthetic adversarial suite, but no pass-rate, failure-rate or clinician evaluation against a live LLM is reported. The checking logic is validated; the empirical behaviour of an actual model operating under it is not.
 \end{itemize}
 
 \section{Ethical considerations}\label{ethical-considerations}
@@ -921,42 +921,42 @@ Following Wohlin et al. (2012), threats are organized into four categories.
 
 \begin{itemize}
 \item
-  \textbf{DGP assumptions.} The benchmark covers four heterogeneity structures but not the true platinum-response surface, which likely involves BRCA status and proteomic variables absent here. Rankings could shift under more biologically realistic DGPs.
+ \textbf{DGP assumptions.} The benchmark covers four heterogeneity structures but not the true platinum-response surface, which likely involves BRCA status and proteomic variables absent here. Rankings could shift under more biologically realistic DGPs.
 \item
-  \textbf{TCGA selection bias.} TCGA patients were recruited at academic medical centres, systematically differing from community-hospital populations. The conditional unconfoundedness assumption is harder to defend in this context.
+ \textbf{TCGA selection bias.} TCGA patients were recruited at academic medical centres, systematically differing from community-hospital populations. The conditional unconfoundedness assumption is harder to defend in this context.
 \item
-  \textbf{Hyperparameter uniformity.} All Random Forest models use a common configuration (200 trees, max depth 6, min samples 5). Separately tuning each method could change rankings, but would confound meta-learning strategy with hyperparameter optimization.
+ \textbf{Hyperparameter uniformity.} All Random Forest models use a common configuration (200 trees, max depth 6, min samples 5). Separately tuning each method could change rankings, but would confound meta-learning strategy with hyperparameter optimization.
 \item
-  \textbf{Encoder leakage.} The outcome-trained encoder produces leaf embeddings before causal cross-fitting begins, leaking some outcome information into the covariate space.
+ \textbf{Encoder leakage.} The outcome-trained encoder produces leaf embeddings before causal cross-fitting begins, leaking some outcome information into the covariate space.
 \end{itemize}
 
 \subsection{External validity}\label{external-validity}
 
 \begin{itemize}
 \item
-  \textbf{Generalizability.} Results on TCGA-OV and the binary five-year outcome may not transfer to other cancer types, treatment modalities, or outcome definitions.
+ \textbf{Generalizability.} Results on TCGA-OV and the binary five-year outcome may not transfer to other cancer types, treatment modalities, or outcome definitions.
 \item
-  \textbf{Temporal coverage.} Diagnoses from 1992 to 2013 may not reflect contemporary treatment-response patterns.
+ \textbf{Temporal coverage.} Diagnoses from 1992 to 2013 may not reflect contemporary treatment-response patterns.
 \end{itemize}
 
 \subsection{Construct validity}\label{construct-validity}
 
 \begin{itemize}
 \item
-  \textbf{Binary survival outcome.} Five-year binary survival ignores time-to-event structure, quality of life and toxicity.
+ \textbf{Binary survival outcome.} Five-year binary survival ignores time-to-event structure, quality of life and toxicity.
 \item
-  \textbf{PEHE as a headline metric.} PEHE rank does not predict policy quality. Reporting PEHE as the primary metric alone could mislead about clinically relevant performance; co-reporting estimated AIPW value mitigates this.
+ \textbf{PEHE as a headline metric.} PEHE rank does not predict policy quality. Reporting PEHE as the primary metric alone could mislead about clinically relevant performance; co-reporting estimated AIPW value mitigates this.
 \item
-  \textbf{Adapted survival comparators.} The Cox PH and RF classifiers in this benchmark are binary-outcome predictive comparators rather than full survival baselines. They should not be read as direct evidence for or against full Cox PH or full RSF performance on time-to-event ovarian cancer data.
+ \textbf{Adapted survival comparators.} The Cox PH and RF classifiers in this benchmark are binary-outcome predictive comparators rather than full survival baselines. They should not be read as direct evidence for or against full Cox PH or full RSF performance on time-to-event ovarian cancer data.
 \end{itemize}
 
 \subsection{Conclusion validity}\label{conclusion-validity}
 
 \begin{itemize}
 \item
-  \textbf{Test-set size.} With n\_test approximately 137 per run, per-run standard errors are non-trivial. Aggregating 40 runs helps but does not eliminate the issue.
+ \textbf{Test-set size.} With n\_test approximately 137 per run, per-run standard errors are non-trivial. Aggregating 40 runs helps but does not eliminate the issue.
 \item
-  \textbf{No multiple-comparison correction.} Seven causal methods compared pairwise produces multiple tests. Only two comparisons of interest were pre-specified; the rest are exploratory.
+ \textbf{No multiple-comparison correction.} Seven causal methods compared pairwise produces multiple tests. Only two comparisons of interest were pre-specified; the rest are exploratory.
 \end{itemize}
 
 \chapter{Conclusion}\label{conclusion}
